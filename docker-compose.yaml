@@ -4,7 +4,11 @@ services:
     build:
       context: ./docker
       dockerfile: Dockerfile
+      args:
+        USER_ID: ${USER_ID}
+        GROUP_ID: ${GROUP_ID}
     platform: linux/amd64
+    user: ${USER_ID}:${GROUP_ID}
     ports: [5000:80]
     volumes:
       - .:/build:rw,cached

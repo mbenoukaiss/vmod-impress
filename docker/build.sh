@@ -16,8 +16,8 @@ cp target/release/libvmod_shrink.so "$OUT/libvmod_shrink.so"
 rm /tmp/tmp_file_to_delete.*
 cp out/libvmod_shrink.so /usr/lib/varnish/vmods
 
-if [ -f /var/run/varnish ]; then
-    kill -15 $(cat /var/run/varnish) || true
+if [ -f /tmp/varnish ]; then
+    kill -15 $(cat /tmp/varnish) || true
     sleep 1
 fi
 
@@ -26,6 +26,6 @@ varnishd \
 	  -p feature=+http2 \
 	  -f /etc/varnish/default.vcl \
 	  -s malloc,512m \
-	  -P /var/run/varnish
+	  -P /tmp/varnish
 
 varnishlog
