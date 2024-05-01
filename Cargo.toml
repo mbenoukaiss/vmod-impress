@@ -1,0 +1,22 @@
+[package]
+name = "press"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+varnish = "0.0.19"
+
+[dependencies]
+varnish = "0.0.19"
+image = "0.25"
+webp = "0.3"
+chrono = "0.4.38"
+
+[lib]
+name = "press"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "press-test"
+path = "src/main.rs"
