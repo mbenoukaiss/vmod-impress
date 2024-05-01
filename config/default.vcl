@@ -5,7 +5,7 @@ import shrink;
 backend default none;
 
 sub vcl_init {
-    new www = shrink.root("/etc/varnish/shrink-config.ron");
+    new www = shrink.root("/etc/varnish/shrink.ron");
 }
 
 sub vcl_recv {

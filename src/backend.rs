@@ -1,137 +1,140 @@
-use std::error::Error;
-use std::fs::{File, Metadata};
+use std::error::Error as StdError;
+use std::fs::{Metadata};
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::{BufReader, Read, Take};
+use std::io::{Cursor, Read};
 use std::os::unix::fs::MetadataExt;
 use chrono::{DateTime, Utc};
 use varnish::vcl::backend::{Serve, Transfer};
 use varnish::vcl::ctx::Ctx;
+use varnish::vcl::http::HTTP;
+use crate::config::Config;
+use crate::respond;
+use crate::error::Error;
+use crate::images::Cache;
 
 pub struct FileBackend {
-    pub path: String,
+    config: Config,
+    cache: Cache,
 }
 
-impl Serve<FileTransfer> for FileBackend<> {
-    fn get_type(&self) -> &str {
-        "fileserver"
+impl FileBackend {
+    pub fn new(config: Config, cache: Cache) -> Self {
+        FileBackend { config, cache }
     }
+}
 
-    fn get_headers(&self, ctx: &mut Ctx) -> Result<Option<FileTransfer>, Box<dyn Error>> {
-        // we know that bereq and bereq_url, so we can just unwrap the options
+impl FileBackend {
+    fn get_data(&self, ctx: &mut Ctx) -> Result<Option<FileTransfer>, Error> {
         let bereq = ctx.http_bereq.as_ref().unwrap();
+        let bereq_method = bereq.method().unwrap_or("");
         let bereq_url = bereq.url().unwrap();
-
-        // combine root and url into something that's hopefully safe
-        let path = assemble_file_path(&self.path, bereq_url);
-        ctx.log(varnish::vcl::ctx::LogTag::Debug, &format!("fileserver: file on disk: {:?}", path));
-
-        // reset the bereq lifetime, otherwise we couldn't use ctx in the line above
-        // yes, it feels weird at first, but it's for our own good
-        let bereq = ctx.http_bereq.as_ref().unwrap();
-
-        // let's start building our response
         let beresp = ctx.http_beresp.as_mut().unwrap();
+        let mut transfer = None;
 
-        // open the file and get some metadata
-        let f = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-        let metadata: Metadata = f.metadata().map_err(|e| e.to_string())?;
-        let cl = metadata.len();
-        let modified: DateTime<Utc> = DateTime::from(metadata.modified().unwrap());
-        let etag = generate_etag(&metadata);
+        let pattern = self.config.url_regex.as_ref().expect("Badly initialized config");
 
-        // can we avoid sending a body?
-        let mut is_304 = false;
-        if let Some(inm) = bereq.header("if-none-match") {
-            if inm == etag || (inm.starts_with("W/") && inm[2..] == etag) {
-                is_304 = true;
+        if let Some(captures) = pattern.captures(bereq_url) {
+            let Some((data, metadata)) = self.cache.get(&captures["path"], &captures["size"], "webp")? else {
+                respond!(ctx, 404);
+            };
+
+            //TODO: check if the image has already been converted
+            //TODO: if not convert it and send the converted image to an update queue
+            //TODO: send the image to the client
+
+            if let Some(metadata) = metadata {
+                let (is_304, etag, modified) = get_idk_rename(bereq, metadata);
+
+                if is_304 {
+                    beresp.set_status(304);
+                }
+
+                beresp.set_header("etag", &etag)?;
+                beresp.set_header("last-modified", &modified.format("%a, %d %b %Y %H:%M:%S GMT").to_string())?;
             }
-        } else if let Some(ims) = bereq.header("if-modified-since") {
-            if let Ok(t) = DateTime::parse_from_rfc2822(ims) {
-                if t > modified {
-                    is_304 = true;
+
+            beresp.set_proto("HTTP/1.1")?;
+            beresp.set_header("content-length", &data.len().to_string())?;
+            beresp.set_header("content-type", "image/webp")?;
+
+            if bereq_method != "HEAD" && bereq_method != "GET" {
+                beresp.set_status(405);
+            } else {
+                beresp.set_status(200);
+
+                if bereq_method == "GET" {
+                    transfer = Some(FileTransfer::new(data));
                 }
             }
-        }
-
-        beresp.set_proto("HTTP/1.1")?;
-        let mut transfer = None;
-        if bereq.method() != Some("HEAD") && bereq.method() != Some("GET") {
-            // we are fairly strict in what method we accept
-            beresp.set_status(405);
-            return Ok(None);
-        } else if is_304 {
-            // 304 will save us some bandwidth
-            beresp.set_status(304);
         } else {
-            // "normal" request, if it's a HEAD to save a bunch of work, but if
-            // it's a GET we need to add the VFP to the pipeline
-            // and add a BackendResp to the priv1 field
-            beresp.set_status(200);
-            if bereq.method() == Some("GET") {
-                transfer = Some(FileTransfer {
-                    // prevent reading more than expected
-                    reader: std::io::BufReader::new(f).take(cl)
-                });
-            }
+            respond!(ctx, 404);
         }
-
-        // set all the headers we can, including the content-type if we can
-        beresp.set_header("content-length", &format!("{}", cl))?;
-        beresp.set_header("etag", &etag)?;
-        beresp.set_header("last-modified", &modified.format("%a, %d %b %Y %H:%M:%S GMT").to_string())?;
-        beresp.set_header("content-type", "image/webp")?;
 
         Ok(transfer)
     }
 }
 
+impl Serve<FileTransfer> for FileBackend<> {
+    fn get_type(&self) -> &str {
+        "shrink"
+    }
+
+    fn get_headers(&self, ctx: &mut Ctx) -> Result<Option<FileTransfer>, Box<dyn StdError>> {
+        match self.get_data(ctx) {
+            Ok(transfer) => Ok(transfer),
+            Err(e) => {
+                let beresp = ctx.http_beresp.as_mut().unwrap();
+                beresp.set_status(500);
+                beresp.set_header("error", &e.to_string())?;
+
+                Ok(None)
+            }
+        }
+    }
+}
+
 pub struct FileTransfer {
-    reader: Take<BufReader<File>>,
+    reader: Cursor<Vec<u8>>,
+}
+
+impl FileTransfer {
+    pub fn new(data: Vec<u8>) -> Self {
+        FileTransfer {
+            reader: Cursor::new(data),
+        }
+    }
 }
 
 impl Transfer for FileTransfer {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Box<dyn Error>> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Box<dyn StdError>> {
         self.reader.read(buf).map_err(|e| e.into())
     }
 
     fn len(&self) -> Option<usize> {
-        Some(self.reader.limit() as usize)
+        Some(self.reader.get_ref().len())
     }
 }
 
-// given root_path and url, assemble the two so that the final path is still
-// inside root_path
-// There's no access to the file system, and therefore no link resolution
-// it can be an issue for multitenancy, beware!
-fn assemble_file_path(root_path: &str, url: &str) -> std::path::PathBuf {
-    assert_ne!(root_path, "");
+fn get_idk_rename(bereq: &HTTP, metadata: Metadata) -> (bool, String, DateTime<Utc>) {
+    let modified: DateTime<Utc> = DateTime::from(metadata.modified().unwrap());
+    let etag = generate_etag(&metadata);
 
-    let url_path = std::path::PathBuf::from(url);
-    let mut components = Vec::new();
-
-    for c in url_path.components() {
-        use std::path::Component::*;
-        match c {
-            Prefix(_) => unreachable!(),
-            RootDir => {}
-            CurDir => (),
-            ParentDir => { components.pop(); }
-            Normal(s) => {
-                // we can unwrap as url_path was created from an &str
-                components.push(s.to_str().unwrap());
+    if let Some(inm) = bereq.header("if-none-match") {
+        if inm == etag || (inm.starts_with("W/") && inm[2..] == etag) {
+            return (true, etag, modified);
+        }
+    } else if let Some(ims) = bereq.header("if-modified-since") {
+        if let Ok(t) = DateTime::parse_from_rfc2822(ims) {
+            if t > modified {
+                return (true, etag, modified);
             }
-        };
+        }
     }
 
-    let mut complete_path = String::from(root_path);
-    for c in components {
-        complete_path.push('/');
-        complete_path.push_str(c);
-    }
-    std::path::PathBuf::from(complete_path)
+    return (false, etag, modified);
 }
 
-fn generate_etag(metadata: &std::fs::Metadata) -> String {
+fn generate_etag(metadata: &Metadata) -> String {
     #[derive(Hash)]
     struct ShortMd {
         inode: u64,
@@ -147,28 +150,4 @@ fn generate_etag(metadata: &std::fs::Metadata) -> String {
     let mut h = DefaultHasher::new();
     smd.hash(&mut h);
     format!("\"{}\"", h.finish())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::assemble_file_path;
-
-    fn tc(root_path: &str, url: &str, expected: &str) {
-        assert_eq!(assemble_file_path(root_path, url), std::path::PathBuf::from(expected));
-    }
-
-    #[test]
-    fn simple() { tc("/foo/bar", "/baz/qux", "/foo/bar/baz/qux"); }
-
-    #[test]
-    fn simple_slash() { tc("/foo/bar/", "/baz/qux", "/foo/bar/baz/qux"); }
-
-    #[test]
-    fn parent() { tc("/foo/bar", "/bar/../qux", "/foo/bar/qux"); }
-
-    #[test]
-    fn too_many_parents() { tc("/foo/bar", "/bar/../../qux", "/foo/bar/qux"); }
-
-    #[test]
-    fn current() { tc("/foo/bar", "/bar/././qux", "/foo/bar/bar/qux"); }
 }

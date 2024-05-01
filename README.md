@@ -18,3 +18,5 @@ docker exec shrink /build.sh
 ## Todo
 - Fix docker permissions in `out` directory 🙃
 - Add support for AVIF and JPEG
+- Support fetching images from another backend ?
+- Tests

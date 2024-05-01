@@ -6,7 +6,7 @@ OUT="out"
 VMODTOOL="$(pkg-config  --variable=vmodtool varnishapi)"
 
 cd /build
-cargo build --release
+cargo build --lib --release
 cargo test --release
 
 mkdir -p "$OUT"
@@ -17,7 +17,7 @@ rm /tmp/tmp_file_to_delete.*
 cp out/libvmod_shrink.so /usr/lib/varnish/vmods
 
 if [ -f /var/run/varnish ]; then
-    kill -15 $(cat /var/run/varnish)
+    kill -15 $(cat /var/run/varnish) || true
     sleep 1
 fi
 
@@ -27,3 +27,5 @@ varnishd \
 	  -f /etc/varnish/default.vcl \
 	  -s malloc,512m \
 	  -P /var/run/varnish
+
+varnishlog

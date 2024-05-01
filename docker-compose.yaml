@@ -1,5 +1,5 @@
 services:
-  varnish:
+  shrink:
     container_name: shrink
     build:
       context: ./docker

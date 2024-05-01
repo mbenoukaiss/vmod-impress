@@ -1,0 +1,12 @@
+Config(
+    formats: ["webp"],
+    default_quality: 75.0,
+    root: "/build/media",
+    url: "/media/{size}/{path}.{ext}",
+    cache_directory: "/build/cache",
+    sizes: {
+        "low": Format(width: 300, height: 300),
+        "medium": Format(width: 600, height: 600),
+        "high": Format(width: 1200, height: 1200),
+    },
+)

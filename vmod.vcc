@@ -1,9 +1,10 @@
 $Module shrink 3 "Optimize and resize images"
 
-$Object root(STRING path)
+$Object root([STRING config_path])
 
-Create a base object, using `path` as the root, meaning all files served but it will be relative to this path.
-Beware: symlinks can still escape `path`, which can be important in a low-trust, multi-tenant setup (i.e. tenants will be able to extract each other's files).
+Create a base object, using `config_path` as the configuration file for the vmod. If `config_path` is not provided, the
+default configuration file path located at `/etc/varnish/shrink.ron` will be used.
+If the configuration file is not found or empty, the backend will return errors
 
 $Method BACKEND .backend()
 
