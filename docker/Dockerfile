@@ -1,3 +1,4 @@
+#rustlang/rust:nightly-bookworm-slim
 FROM rust:1.77-slim-bookworm
 
 ARG USER_ID

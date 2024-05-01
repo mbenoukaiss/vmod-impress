@@ -7,12 +7,20 @@ macro_rules! respond {
 }
 
 #[macro_export]
-macro_rules! debug {
+macro_rules! debug_header {
     ($beresp:ident, $name:expr, $message:expr) => {
         $beresp.set_header($name, $message)?;
     };
-    (die: $beresp:expr, $name:expr, $message:expr) => {
+    (abort: $beresp:expr, $name:expr, $message:expr) => {
         $beresp.set_header($name, $message)?;
         return Ok(None);
+    };
+}
+
+#[macro_export]
+macro_rules! debug_file {
+    ($name:expr, $data:expr) => {
+        ::std::fs::create_dir_all("/build/debug").unwrap();
+        ::std::fs::write(format!("/build/debug/{}.txt", $name), format!("{:#?}", $data)).unwrap();
     };
 }
