@@ -1,6 +1,6 @@
-$Module press 3 "Optimize and resize images"
+$Module shrink 3 "Optimize and resize images"
 
-$Object root(STRING path, [STRING mime_db])
+$Object root(STRING path)
 
 Create a base object, using `path` as the root, meaning all files served but it will be relative to this path.
 Beware: symlinks can still escape `path`, which can be important in a low-trust, multi-tenant setup (i.e. tenants will be able to extract each other's files).

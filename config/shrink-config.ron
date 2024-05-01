@@ -1,0 +1,10 @@
+Config(
+    formats: ["webp"],
+    quality: 75,
+    path: "/build/media",
+    sizes: {
+        low: [300, 300],
+        medium: [600, 600],
+        high: [1200, 1200],
+    },
+)

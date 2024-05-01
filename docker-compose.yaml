@@ -1,0 +1,11 @@
+services:
+  varnish:
+    container_name: shrink
+    build:
+      context: ./docker
+      dockerfile: Dockerfile
+    platform: linux/amd64
+    ports: [5000:80]
+    volumes:
+      - .:/build:rw,cached
+      - ./config:/etc/varnish:rw,cached

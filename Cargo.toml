@@ -1,5 +1,5 @@
 [package]
-name = "press"
+name = "vmod_shrink"
 version = "0.1.0"
 edition = "2021"
 
@@ -10,13 +10,16 @@ varnish = "0.0.19"
 varnish = "0.0.19"
 image = "0.25"
 webp = "0.3"
-chrono = "0.4.38"
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+ron = "0.8"
+serde_json = "1.0"
 
 [lib]
-name = "press"
+name = "vmod_shrink"
 path = "src/lib.rs"
 crate-type = ["cdylib"]
 
 [[bin]]
-name = "press-test"
+name = "vmod_shrink_tests"
 path = "src/main.rs"
