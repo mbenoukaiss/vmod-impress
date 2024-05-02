@@ -34,6 +34,12 @@ impl FileBackend {
         let pattern = self.config.url_regex.as_ref().expect("Badly initialized config");
 
         if let Some(captures) = pattern.captures(bereq_url) {
+            if self.config.sizes.get(&captures["size"])
+                .and_then(|size| size.pattern_regex.as_ref())
+                .map_or(false, |p| !p.is_match(&captures["path"])) {
+                respond!(ctx, 404);
+            }
+
             let extension = self.get_best_extension(bereq);
             let Some((data, last_modified)) = self.cache.get(&captures["path"], &captures["size"], extension)? else {
                 respond!(ctx, 404);
@@ -69,7 +75,7 @@ impl FileBackend {
 
     fn get_best_extension(&self, bereq: &HTTP) -> &str {
         let Some(accept) = bereq.header("accept") else {
-            return self.config.formats.first().map(String::as_ref).unwrap();
+            return &self.config.default_format;
         };
 
         for ext in &self.config.formats {
@@ -78,7 +84,7 @@ impl FileBackend {
             }
         }
 
-        "jpeg"
+        &self.config.default_format
     }
 }
 

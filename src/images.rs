@@ -15,11 +15,11 @@ use webp::{Encoder, WebPConfig, WebPMemory};
 use crate::backend::FileTransfer;
 use crate::config::Config;
 use crate::error::Error;
-use crate::utils;
+use crate::{debug_file, utils};
 
 pub struct Cache {
     config: Config,
-    data: Arc<RwLock<HashMap<String, CacheImage>>>,
+    pub data: Arc<RwLock<HashMap<String, CacheImage>>>,
     save_queue: Sender<(String, String, String, Vec<u8>)>,
 }
 
@@ -28,7 +28,7 @@ impl Cache {
         let (tx, rx) = mpsc::channel();
         let data = Arc::new(RwLock::new(Cache::load_images(&config)));
 
-        Cache::spawn_worker_thread(config.clone(), data.clone(), rx);
+        //Cache::spawn_worker_thread(config.clone(), data.clone(), rx);
 
         Cache {
             config: config.clone(),
@@ -51,7 +51,7 @@ impl Cache {
             .filter(|e| !e.file_type().is_dir());
 
         for file in files {
-            let filename = String::from(file.file_name().to_string_lossy());
+            let filename = String::from(file.path().strip_prefix(&config.root).unwrap().to_string_lossy());
 
             if let (Some(stem), Some(extension)) = utils::decompose_filename(&filename) {
                 if !supported_extensions.contains(extension) {
