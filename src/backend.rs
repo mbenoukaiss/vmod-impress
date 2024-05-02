@@ -1,12 +1,12 @@
 use std::error::Error as StdError;
-use std::fs::{Metadata};
+use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::{Cursor, Read};
-use std::os::unix::fs::MetadataExt;
+use std::io::{BufReader, Read};
 use chrono::{DateTime, Utc};
 use varnish::vcl::backend::{Serve, Transfer};
 use varnish::vcl::ctx::Ctx;
 use varnish::vcl::http::HTTP;
+use webp::WebPMemory;
 use crate::config::Config;
 use crate::respond;
 use crate::error::Error;
@@ -34,27 +34,21 @@ impl FileBackend {
         let pattern = self.config.url_regex.as_ref().expect("Badly initialized config");
 
         if let Some(captures) = pattern.captures(bereq_url) {
-            let Some((data, metadata)) = self.cache.get(&captures["path"], &captures["size"], "webp")? else {
+            let extension = self.get_best_extension(bereq);
+            let Some((data, last_modified)) = self.cache.get(&captures["path"], &captures["size"], extension)? else {
                 respond!(ctx, 404);
             };
 
-            //TODO: check if the image has already been converted
-            //TODO: if not convert it and send the converted image to an update queue
-            //TODO: send the image to the client
+            let (is_304, etag) = process_cache_headers(&bereq, &captures["path"], data.size(), &last_modified);
 
-            if let Some(metadata) = metadata {
-                let (is_304, etag, modified) = get_idk_rename(bereq, metadata);
-
-                if is_304 {
-                    beresp.set_status(304);
-                }
-
-                beresp.set_header("etag", &etag)?;
-                beresp.set_header("last-modified", &modified.format("%a, %d %b %Y %H:%M:%S GMT").to_string())?;
+            if is_304 {
+                beresp.set_status(304);
             }
 
             beresp.set_proto("HTTP/1.1")?;
-            beresp.set_header("content-length", &data.len().to_string())?;
+            beresp.set_header("etag", &etag)?;
+            beresp.set_header("last-modified", &last_modified.format("%a, %d %b %Y %H:%M:%S GMT").to_string())?;
+            beresp.set_header("content-length", &data.size().to_string())?;
             beresp.set_header("content-type", "image/webp")?;
 
             if bereq_method != "HEAD" && bereq_method != "GET" {
@@ -63,7 +57,7 @@ impl FileBackend {
                 beresp.set_status(200);
 
                 if bereq_method == "GET" {
-                    transfer = Some(FileTransfer::new(data));
+                    transfer = Some(data);
                 }
             }
         } else {
@@ -71,6 +65,20 @@ impl FileBackend {
         }
 
         Ok(transfer)
+    }
+
+    fn get_best_extension(&self, bereq: &HTTP) -> &str {
+        let Some(accept) = bereq.header("accept") else {
+            return self.config.formats.first().map(String::as_ref).unwrap();
+        };
+
+        for ext in &self.config.formats {
+            if accept.contains(ext) {
+                return ext;
+            }
+        }
+
+        "jpeg"
     }
 }
 
@@ -93,61 +101,56 @@ impl Serve<FileTransfer> for FileBackend<> {
     }
 }
 
-pub struct FileTransfer {
-    reader: Cursor<Vec<u8>>,
+pub enum FileTransfer {
+    File(BufReader<File>, usize),
+    Webp(WebPMemory),
 }
 
 impl FileTransfer {
-    pub fn new(data: Vec<u8>) -> Self {
-        FileTransfer {
-            reader: Cursor::new(data),
+    #[inline]
+    pub fn size(&self) -> usize {
+        match self {
+            FileTransfer::File(_, len) => *len,
+            FileTransfer::Webp(webp) => webp.len(),
         }
     }
 }
 
 impl Transfer for FileTransfer {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Box<dyn StdError>> {
-        self.reader.read(buf).map_err(|e| e.into())
+        let read = match self {
+            FileTransfer::File(file, _) => file.read(buf)?,
+            FileTransfer::Webp(webp) => webp.take(buf.len() as u64).read(buf)?,
+        };
+
+        Ok(read)
     }
 
     fn len(&self) -> Option<usize> {
-        Some(self.reader.get_ref().len())
+        Some(self.size())
     }
 }
 
-fn get_idk_rename(bereq: &HTTP, metadata: Metadata) -> (bool, String, DateTime<Utc>) {
-    let modified: DateTime<Utc> = DateTime::from(metadata.modified().unwrap());
-    let etag = generate_etag(&metadata);
+fn process_cache_headers(bereq: &HTTP, path: &str, size: usize, last_modified: &DateTime<Utc>) -> (bool, String) {
+    let etag = generate_etag(path, size, &last_modified);
 
     if let Some(inm) = bereq.header("if-none-match") {
         if inm == etag || (inm.starts_with("W/") && inm[2..] == etag) {
-            return (true, etag, modified);
+            return (true, etag);
         }
     } else if let Some(ims) = bereq.header("if-modified-since") {
         if let Ok(t) = DateTime::parse_from_rfc2822(ims) {
-            if t > modified {
-                return (true, etag, modified);
+            if t > *last_modified {
+                return (true, etag);
             }
         }
     }
 
-    return (false, etag, modified);
+    return (false, etag);
 }
 
-fn generate_etag(metadata: &Metadata) -> String {
-    #[derive(Hash)]
-    struct ShortMd {
-        inode: u64,
-        size: u64,
-        modified: std::time::SystemTime,
-    }
-
-    let smd = ShortMd {
-        inode: metadata.ino(),
-        size: metadata.size(),
-        modified: metadata.modified().unwrap(),
-    };
+fn generate_etag(path: &str, size: usize, last_modified: &DateTime<Utc>) -> String {
     let mut h = DefaultHasher::new();
-    smd.hash(&mut h);
-    format!("\"{}\"", h.finish())
+    (path, size, last_modified).hash(&mut h);
+    h.finish().to_string()
 }

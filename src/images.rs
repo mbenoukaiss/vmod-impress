@@ -1,16 +1,18 @@
 use std::collections::{HashMap, HashSet};
-use std::fs::{File, Metadata};
-use std::io::Read;
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc, RwLock};
 use std::sync::mpsc::{Receiver, Sender};
 use std::{fs, thread};
 use std::thread::JoinHandle;
+use chrono::{DateTime, Utc};
 use image::{DynamicImage, ImageFormat};
 use image::imageops::FilterType;
 use walkdir::WalkDir;
-use webp::{Encoder, WebPConfig};
+use webp::{Encoder, WebPConfig, WebPMemory};
+use crate::backend::FileTransfer;
 use crate::config::Config;
 use crate::error::Error;
 use crate::utils;
@@ -103,7 +105,7 @@ impl Cache {
         })
     }
 
-    pub fn get(&self, image_id: &str, size: &str, ext: &str) -> Result<Option<(Vec<u8>, Option<Metadata>)>, Error> {
+    pub fn get(&self, image_id: &str, size: &str, ext: &str) -> Result<Option<(FileTransfer, DateTime<Utc>)>, Error> {
         let lock = self.data.read()?;
         let Some(cache) = lock.get(image_id) else {
             return Ok(None);
@@ -124,15 +126,16 @@ impl Cache {
         }
     }
 
-    fn read_image(&self, mut file: File) -> Result<Option<(Vec<u8>, Option<Metadata>)>, Error> {
+    fn read_image(&self, file: File) -> Result<Option<(FileTransfer, DateTime<Utc>)>, Error> {
         let metadata = file.metadata()?;
-        let mut buffer = vec![0; metadata.len() as usize];
-        file.read(&mut buffer).expect("buffer overflow");
 
-        Ok(Some((buffer, Some(metadata))))
+        Ok(Some((
+            FileTransfer::File(BufReader::new(file), metadata.len() as usize),
+            DateTime::from(metadata.modified()?),
+        )))
     }
 
-    fn convert_image(&self, cache: &CacheImage, image_id: &str, size: &str, ext: &str) -> Result<Option<(Vec<u8>, Option<Metadata>)>, Error> {
+    fn convert_image(&self, cache: &CacheImage, image_id: &str, size: &str, ext: &str) -> Result<Option<(FileTransfer, DateTime<Utc>)>, Error> {
         let mut path = PathBuf::from(&self.config.root);
         path.push(&cache.base_image);
 
@@ -147,6 +150,7 @@ impl Cache {
 
         let image = resize_image(image, format.width, format.height);
         let webp = convert_webp(&image, format.quality.unwrap_or(self.config.default_quality));
+        let modified = Utc::now();
 
         //if this fails, the image saving thread has crashed, images that have never
         //been loaded will have poor performances but continue serving images on the fly
@@ -155,10 +159,10 @@ impl Cache {
             image_id.to_owned(),
             size.to_owned(),
             ext.to_owned(),
-            webp.clone(),
+            webp.to_vec(),
         ));
 
-        Ok(Some((webp, None)))
+        Ok(Some((FileTransfer::Webp(webp), modified)))
     }
 }
 
@@ -195,20 +199,20 @@ fn read_image(path: PathBuf) -> Result<DynamicImage, Error> {
 }
 
 fn resize_image(image: DynamicImage, width: u32, height: u32) -> DynamicImage {
-    image.resize(width, height, FilterType::Triangle)
+    image.resize(width, height, FilterType::Lanczos3)
 }
 
-fn convert_webp(image: &DynamicImage, quality: f32) -> Vec<u8> {
+fn convert_webp(image: &DynamicImage, quality: f32) -> WebPMemory {
     //TODO: check libwebp configs to find the best compromise
     let mut config = WebPConfig::new().unwrap();
     config.quality = quality;
     config.lossless = 0;
-    config.alpha_quality = 0;
-    config.alpha_compression = 0;
+    config.alpha_quality = 50;
+    config.alpha_compression = 1;
     config.alpha_filtering = 0;
     config.autofilter = 0;
-    config.filter_sharpness = 0;
-    config.filter_strength = 0;
+    config.filter_sharpness = 4;
+    config.filter_strength = 50;
     config.filter_type = 0;
     config.use_sharp_yuv = 0;
     config.method = 3;
@@ -217,5 +221,4 @@ fn convert_webp(image: &DynamicImage, quality: f32) -> Vec<u8> {
         .expect("Unsupported format")
         .encode_advanced(&config)
         .unwrap()
-        .to_vec()
 }
