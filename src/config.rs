@@ -5,16 +5,19 @@ use ron::extensions::Extensions;
 use ron::Options;
 use serde::{Deserialize, Serialize};
 use crate::error::Error;
+use crate::images;
+use crate::images::OptimizationConfig;
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct Config {
-    pub formats: Vec<String>,
+    pub extensions: Vec<String>,
     pub default_quality: f32,
     pub default_format: String,
     pub root: String,
     pub url: String,
     pub cache_directory: String,
     pub sizes: HashMap<String, Size>,
+    pub log_path: Option<String>,
 
     #[serde(skip_deserializing, skip_serializing)]
     pub url_regex: Option<Regex>,
@@ -52,6 +55,15 @@ impl Config {
                 }
             }
 
+            let unsupported_extensions = config.extensions.iter()
+                .map(|extension| extension.as_str())
+                .filter(|extension| !images::supports(extension))
+                .collect::<Vec<&str>>();
+
+            if !unsupported_extensions.is_empty() {
+                return Error::err(format!("Unsupported extensions: {:?}", unsupported_extensions));
+            }
+
             Ok(config)
         } else {
             Error::err(format!("Unable to read config file {}", path))
@@ -62,7 +74,7 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            formats: vec![String::from("webp")],
+            extensions: vec![String::from("webp")],
             default_quality: 415.0,
             default_format: String::from("jpeg"),
             root: String::from("/dev/null"),
@@ -78,7 +90,30 @@ impl Default for Config {
                     pattern_regex: None,
                 }),
             ]),
+            log_path: None,
             url_regex: None,
+        }
+    }
+}
+
+impl Size {
+    pub fn matches(&self, image: &str) -> bool {
+        if let Some(pattern) = &self.pattern_regex {
+            pattern.is_match(image)
+        } else {
+            true
+        }
+    }
+
+}
+
+impl OptimizationConfig {
+    pub fn new(config: &Config, size: &str, format: &str) -> OptimizationConfig {
+        match format {
+            "webp" => OptimizationConfig::Webp {
+                quality: config.sizes.get(size).unwrap().quality.unwrap_or(config.default_quality),
+            },
+            _ => panic!("Unsupported extension"),
         }
     }
 }

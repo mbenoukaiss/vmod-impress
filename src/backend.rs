@@ -6,11 +6,11 @@ use chrono::{DateTime, Utc};
 use varnish::vcl::backend::{Serve, Transfer};
 use varnish::vcl::ctx::Ctx;
 use varnish::vcl::http::HTTP;
-use webp::WebPMemory;
+use crate::cache::Cache;
 use crate::config::Config;
 use crate::respond;
 use crate::error::Error;
-use crate::images::Cache;
+use crate::images::OptimizedImage;
 
 pub struct FileBackend {
     config: Config,
@@ -34,9 +34,7 @@ impl FileBackend {
         let pattern = self.config.url_regex.as_ref().expect("Badly initialized config");
 
         if let Some(captures) = pattern.captures(bereq_url) {
-            if self.config.sizes.get(&captures["size"])
-                .and_then(|size| size.pattern_regex.as_ref())
-                .map_or(false, |p| !p.is_match(&captures["path"])) {
+            if !self.config.sizes.get(&captures["size"]).map_or(false, |p| p.matches(&captures["path"])) {
                 respond!(ctx, 404);
             }
 
@@ -78,7 +76,7 @@ impl FileBackend {
             return &self.config.default_format;
         };
 
-        for ext in &self.config.formats {
+        for ext in &self.config.extensions {
             if accept.contains(ext) {
                 return ext;
             }
@@ -109,7 +107,7 @@ impl Serve<FileTransfer> for FileBackend<> {
 
 pub enum FileTransfer {
     File(BufReader<File>, usize),
-    Webp(WebPMemory),
+    Memory(Box<dyn OptimizedImage>),
 }
 
 impl FileTransfer {
@@ -117,7 +115,7 @@ impl FileTransfer {
     pub fn size(&self) -> usize {
         match self {
             FileTransfer::File(_, len) => *len,
-            FileTransfer::Webp(webp) => webp.len(),
+            FileTransfer::Memory(data) => data.data().len(),
         }
     }
 }
@@ -126,7 +124,7 @@ impl Transfer for FileTransfer {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Box<dyn StdError>> {
         let read = match self {
             FileTransfer::File(file, _) => file.read(buf)?,
-            FileTransfer::Webp(webp) => webp.take(buf.len() as u64).read(buf)?,
+            FileTransfer::Memory(data) => data.data().take(buf.len() as u64).read(buf)?,
         };
 
         Ok(read)
