@@ -88,7 +88,7 @@ impl FileBackend {
 
 impl Serve<FileTransfer> for FileBackend<> {
     fn get_type(&self) -> &str {
-        "shrink"
+        "impress"
     }
 
     fn get_headers(&self, ctx: &mut Ctx) -> Result<Option<FileTransfer>, Box<dyn StdError>> {

@@ -23,11 +23,13 @@ use crate::cache::Cache;
 use crate::config::Config;
 
 #[allow(non_camel_case_types)]
-struct root {
+type new = Impress;
+
+struct Impress {
     backend: Backend<FileBackend, FileTransfer>,
 }
 
-impl root {
+impl Impress {
     pub fn new(ctx: &mut Ctx, vcl_name: &str, path: Option<&str>) -> Result<Self, Error> {
         let config = Config::parse(path)?;
         if let Some(log_path) = &config.log_path {
@@ -39,7 +41,7 @@ impl root {
 
         let backend = Backend::new(ctx, vcl_name, backend, false)?;
 
-        Ok(root { backend })
+        Ok(Impress { backend })
     }
 
     pub fn backend(&self, _ctx: &Ctx) -> VCLBackendPtr {

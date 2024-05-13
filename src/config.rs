@@ -37,7 +37,7 @@ pub struct Size {
 
 impl Config {
     pub fn parse(path: Option<&str>) -> Result<Config, Error> {
-        let path = path.unwrap_or("shrink.ron").to_owned();
+        let path = path.unwrap_or("impress.ron").to_owned();
 
         if let Ok(config) = fs::read_to_string(&path) {
             let mut config = Options::default()
@@ -79,7 +79,7 @@ impl Default for Config {
             default_format: String::from("jpeg"),
             root: String::from("/dev/null"),
             url: String::from("/media"),
-            cache_directory: String::from("/tmp/shrink"),
+            cache_directory: String::from("/tmp/impress"),
             sizes: HashMap::from([
                 (String::from("default"), Size {
                     width: 500,

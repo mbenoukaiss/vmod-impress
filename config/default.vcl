@@ -1,11 +1,11 @@
 vcl 4.1;
 
-import shrink;
+import impress;
 
 backend default none;
 
 sub vcl_init {
-    new images = shrink.root("/etc/varnish/shrink.ron");
+    new images = impress.new("/etc/varnish/impress.ron");
 }
 
 sub vcl_recv {

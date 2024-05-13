@@ -1,0 +1,12 @@
+Config(
+    extensions: ["webp"],
+    default_format: "jpeg",
+    default_quality: 70.0,
+    root: "/build/media",
+    url: "/media/{size}/{path}.{ext}",
+    cache_directory: "/build/cache",
+    sizes: {
+        "image_product": Size(width: 600, height: 400, pattern: "^products/", pre_optimize: true),
+    },
+    log_path: "/build/debug/log.txt",
+)

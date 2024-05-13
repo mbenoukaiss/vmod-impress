@@ -1,5 +1,5 @@
 [package]
-name = "vmod_shrink"
+name = "vmod_impress"
 version = "0.1.0"
 edition = "2021"
 
@@ -22,10 +22,10 @@ notify = "6.1"
 itertools = "0.12"
 
 [lib]
-name = "vmod_shrink"
+name = "vmod_impress"
 path = "src/lib.rs"
 crate-type = ["cdylib"]
 
 [[bin]]
-name = "vmod_shrink_tests"
+name = "vmod_impress_tests"
 path = "src/main.rs"
