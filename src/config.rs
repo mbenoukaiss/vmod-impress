@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use log::LevelFilter;
 use regex::Regex;
 use ron::extensions::Extensions;
 use ron::Options;
@@ -17,7 +18,7 @@ pub struct Config {
     pub url: String,
     pub cache_directory: String,
     pub sizes: HashMap<String, Size>,
-    pub log_path: Option<String>,
+    pub logger: Option<Logger>,
 
     #[serde(skip_deserializing, skip_serializing)]
     pub url_regex: Option<Regex>,
@@ -33,6 +34,12 @@ pub struct Size {
 
     #[serde(skip_deserializing, skip_serializing)]
     pub pattern_regex: Option<Regex>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct Logger {
+    pub path: String,
+    pub level: Option<LevelFilter>,
 }
 
 impl Config {
@@ -90,7 +97,7 @@ impl Default for Config {
                     pattern_regex: None,
                 }),
             ]),
-            log_path: None,
+            logger: None,
             url_regex: None,
         }
     }

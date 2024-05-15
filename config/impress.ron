@@ -6,7 +6,13 @@ Config(
     url: "/media/{size}/{path}.{ext}",
     cache_directory: "/build/cache",
     sizes: {
-        "image_product": Size(width: 600, height: 400, pattern: "^products/", pre_optimize: true),
+        "low": Size(width: 300, height: 300),
+        "medium": Size(width: 600, height: 600),
+        "high": Size(width: 1200, height: 1200),
+        "product": Size(width: 546, height: 302, pattern: "^products/", pre_optimize: true),
     },
-    log_path: "/build/debug/log.txt",
+    logger: Logger(
+        path: "/build/debug/impress.log",
+        level: TRACE
+    ),
 )

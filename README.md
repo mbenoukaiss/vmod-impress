@@ -43,16 +43,19 @@ Config(
     extensions: ["webp"],
     default_format: "jpeg",
     default_quality: 70.0,
-    root: "/build/media",
+    root: "/var/www/media",
     url: "/media/{size}/{path}.{ext}",
-    cache_directory: "/build/cache",
+    cache_directory: "/var/cache/varnish",
     sizes: {
         "low": Size(width: 300, height: 300),
-        "medium": Size(width: 600, height: 600, pre_optimize: true),
+        "medium": Size(width: 600, height: 600),
         "high": Size(width: 1200, height: 1200),
         "product": Size(width: 546, height: 302, pattern: "^products/", pre_optimize: true),
     },
-    log_path: "/build/debug/log.txt",
+    logger: Logger(
+        path: "/var/log/impress.log",
+        level: WARN
+    ),
 )
 ```
 
@@ -69,7 +72,7 @@ falling back to this format, the original image format will be served
 - `url` : URL pattern to match and extract the image size, path and extension from
 - `cache_directory` : Directory to store the optimized and resized images
 - `sizes` : Map of image sizes and their configurations, see below
-- `log_path` : Path to the log file (currently doesn't work 🙃)
+- `logger` : Logger configuration, leave empty to disable
 
 ### Sizes
 You can add multiple sizes to the `sizes` map, each size has the following fields :
@@ -81,6 +84,11 @@ the path does not match a 404 will be returned
 - `pre_optimize` : If set to true, a thread will be spawned to optimize all the 
 matching images to this format. It is recommanded to also set a pattern if not 
 all images will be served in this format to avoid generating a lot of useless files
+
+### Logger
+Configures the logger, leave empty to deactivate the logger
+- `path` : Log file path
+- `level` : Minimum level of log, levels below will be filtered out
 
 ## Todo
 - Add support for AVIF and JPEG

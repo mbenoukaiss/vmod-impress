@@ -13,16 +13,16 @@ mod images;
 mod error;
 mod utils;
 
-use std::fs::File;
-use std::io::Write;
-use chrono::Local;
-use env_logger::Target;
+use log4rs::append::file::FileAppender;
+use log4rs::config::{Appender,Config as LogConfig, Root};
+use log4rs::encode::pattern::PatternEncoder;
+use log::LevelFilter;
 use varnish::vcl::ctx::Ctx;
 use varnish::vcl::backend::{Backend, VCLBackendPtr};
 use crate::error::Error;
 use crate::backend::{FileBackend, FileTransfer};
 use crate::cache::Cache;
-use crate::config::Config;
+use crate::config::{Config, Logger as LoggerConfig};
 
 #[allow(non_camel_case_types)]
 type new = Impress;
@@ -34,8 +34,8 @@ struct Impress {
 impl Impress {
     pub fn new(ctx: &mut Ctx, vcl_name: &str, path: Option<&str>) -> Result<Self, Error> {
         let config = Config::parse(path)?;
-        if let Some(log_path) = &config.log_path {
-            setup_logging(log_path);
+        if let Some(logger) = &config.logger {
+            setup_logging(logger);
         }
 
         let cache = Cache::new(&config);
@@ -51,21 +51,17 @@ impl Impress {
     }
 }
 
-fn setup_logging(log_path: &str) {
-    let target = Box::new(File::create(log_path).unwrap());
+fn setup_logging(logger_config: &LoggerConfig) {
+    let file = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} | {({l}):5.5} | {f}:{L} — {m}{n}")))
+        .append(true)
+        .build(&logger_config.path)
+        .unwrap();
 
-    env_logger::Builder::new()
-        .target(Target::Pipe(target))
-        .format(|buf, record| {
-            writeln!(
-                buf,
-                "[{} {} {}:{}] {}",
-                Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
-                record.level(),
-                record.file().unwrap_or("unknown"),
-                record.line().unwrap_or(0),
-                record.args()
-            )
-        })
-        .init();
+    let config = LogConfig::builder()
+        .appender(Appender::builder().build("file_ap", Box::new(file)))
+        .build(Root::builder().appender("file_ap").build(logger_config.level.unwrap_or(LevelFilter::Info)))
+        .unwrap();
+
+    log4rs::init_config(config).unwrap();
 }
