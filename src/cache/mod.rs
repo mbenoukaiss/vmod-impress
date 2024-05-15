@@ -33,10 +33,10 @@ impl Cache {
         let (tx, rx) = mpsc::channel();
         let data = CacheData::default();
 
+        Self::load_images(&config, data.clone());
         file_saver::spawn(config.clone(), data.clone(), rx);
         watcher::spawn(config.clone(), data.clone(), tx.clone());
         pre_optimizer::spawn(config.clone(), data.clone(), tx.clone());
-        Self::load_images(&config, data.clone());
 
         Cache {
             config: config.clone(),
@@ -125,7 +125,7 @@ impl Cache {
             return Error::err("Size not found in config");
         };
 
-        let optimization_config = OptimizationConfig::new(&self.config, size, ext);
+        let optimization_config = OptimizationConfig::new(&self.config, size, ext, false);
         let image = images::resize(&image, format.width, format.height);
         let optimized = images::optimize(&image, optimization_config)?;
         let modified = Utc::now();
@@ -144,7 +144,7 @@ impl Cache {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CacheImage {
     pub base_image_path: String,
     pub optimized: HashMap<(String, String), String>, //associating size and extension to the path

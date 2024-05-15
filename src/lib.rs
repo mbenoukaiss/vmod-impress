@@ -3,12 +3,14 @@ varnish::boilerplate!();
 #[macro_use]
 extern crate log;
 
+#[macro_use]
+mod macros;
+
 mod backend;
 mod cache;
 mod config;
 mod images;
 mod error;
-mod macros;
 mod utils;
 
 use std::fs::File;

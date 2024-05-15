@@ -24,7 +24,7 @@ pub fn resize(image: &DynamicImage, width: u32, height: u32) -> DynamicImage {
 
 pub fn optimize(image: &DynamicImage, config: OptimizationConfig) -> Result<Box<dyn OptimizedImage>, Error> {
     match config {
-        OptimizationConfig::Webp { quality } => Ok(Box::new(webp::to_webp(&image, quality))),
+        OptimizationConfig::Webp { quality, autofilter } => Ok(Box::new(webp::to_webp(&image, quality, autofilter))),
     }
 }
 
@@ -49,9 +49,11 @@ pub fn write<T>(path: T, data: &[u8], last_modified: Option<SystemTime>) -> Resu
 }
 
 pub enum OptimizationConfig {
-    Webp { quality: f32 },
+    Webp { quality: f32, autofilter: bool },
 }
 
 pub trait OptimizedImage {
     fn data(&self) -> &[u8];
+    fn take(&mut self, len: usize) -> &[u8];
+    fn remaining(&self) -> usize;
 }

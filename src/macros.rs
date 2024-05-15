@@ -21,6 +21,6 @@ macro_rules! debug_header {
 macro_rules! debug_file {
     ($name:expr, $data:expr) => {
         ::std::fs::create_dir_all("/build/debug").unwrap();
-        ::std::fs::write(format!("/build/debug/{}.txt", $name), format!("{:#?}", $data)).unwrap();
+        ::std::fs::write(format!("/build/debug/{}.txt", (&$name).to_string().replace("/", "_")), format!("{:#?}", $data)).unwrap();
     };
 }

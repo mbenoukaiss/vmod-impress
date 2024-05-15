@@ -68,7 +68,7 @@ fn handle_modification(event: Event, config: &Config, data: &CacheData, create_i
         let base_image = images::read(&cache.base_image_path)?;
 
         for ((size_name, size), format) in to_optimize {
-            let optimization_config = OptimizationConfig::new(&config, size_name, format);
+            let optimization_config = OptimizationConfig::new(&config, size_name, format, true);
             let resized = images::resize(&base_image, size.width, size.height);
             let optimized = images::optimize(&resized, optimization_config)?;
 
@@ -93,7 +93,7 @@ fn handle_deletion(event: Event, config: &Config, data: &CacheData) -> Result<()
 
     if let Some(image) = lock.remove(&image_id) {
         for (_, path) in image.optimized {
-            fs::remove_file(path).unwrap();
+            fs::remove_file(path)?;
         }
     }
 

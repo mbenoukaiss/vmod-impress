@@ -108,10 +108,11 @@ impl Size {
 }
 
 impl OptimizationConfig {
-    pub fn new(config: &Config, size: &str, format: &str) -> OptimizationConfig {
+    pub fn new(config: &Config, size: &str, format: &str, autofilter: bool) -> OptimizationConfig {
         match format {
             "webp" => OptimizationConfig::Webp {
                 quality: config.sizes.get(size).unwrap().quality.unwrap_or(config.default_quality),
+                autofilter,
             },
             _ => panic!("Unsupported extension"),
         }

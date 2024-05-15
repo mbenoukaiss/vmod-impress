@@ -8,7 +8,6 @@ use varnish::vcl::ctx::Ctx;
 use varnish::vcl::http::HTTP;
 use crate::cache::Cache;
 use crate::config::Config;
-use crate::respond;
 use crate::error::Error;
 use crate::images::OptimizedImage;
 
@@ -115,23 +114,26 @@ impl FileTransfer {
     pub fn size(&self) -> usize {
         match self {
             FileTransfer::File(_, len) => *len,
-            FileTransfer::Memory(data) => data.data().len(),
+            FileTransfer::Memory(data) => data.remaining(),
         }
     }
 }
 
 impl Transfer for FileTransfer {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Box<dyn StdError>> {
-        let read = match self {
+    fn read(&mut self,  buf: &mut [u8]) -> Result<usize, Box<dyn StdError>> {
+        let written_bytes = match self {
             FileTransfer::File(file, _) => file.read(buf)?,
-            FileTransfer::Memory(data) => data.data().take(buf.len() as u64).read(buf)?,
+            FileTransfer::Memory(data) => data.take(buf.len()).read(buf)?,
         };
 
-        Ok(read)
+        Ok(written_bytes)
     }
 
     fn len(&self) -> Option<usize> {
-        Some(self.size())
+        match self {
+            FileTransfer::File(_, len) => Some(*len),
+            FileTransfer::Memory(data) => Some(data.data().len()),
+        }
     }
 }
 
