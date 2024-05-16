@@ -17,6 +17,7 @@ pub struct Config {
     pub root: String,
     pub url: String,
     pub cache_directory: String,
+    pub pre_optimizer_threads: Option<usize>,
     pub sizes: HashMap<String, Size>,
     pub logger: Option<Logger>,
 
@@ -103,6 +104,7 @@ impl Default for Config {
             root: String::from("/dev/null"),
             url: String::from("/media"),
             cache_directory: String::from("/tmp/impress"),
+            pre_optimizer_threads: None,
             sizes: HashMap::from([
                 (String::from("default"), Size {
                     width: 500,

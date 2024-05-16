@@ -95,3 +95,4 @@ Configures the logger, leave empty to deactivate the logger
 - Add support for AVIF and JPEG
 - Support fetching images from another backend ?
 - Tests
+- Don't start pre optimizer thread if no image is set to pre optimize
