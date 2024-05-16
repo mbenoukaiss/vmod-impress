@@ -1,6 +1,6 @@
 Config(
-    extensions: ["webp"],
-    default_format: "jpeg",
+    extensions: [AVIF, WEBP],
+    default_format: JPEG,
     default_quality: 70.0,
     root: "/build/media",
     url: "/media/{size}/{path}.{ext}",
@@ -13,6 +13,6 @@ Config(
     },
     logger: Logger(
         path: "/build/debug/impress.log",
-        level: TRACE
+        level: WARN
     ),
 )

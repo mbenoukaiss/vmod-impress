@@ -1,19 +1,19 @@
 use std::collections::HashMap;
 use std::fs;
+use image::ImageFormat;
 use log::LevelFilter;
 use regex::Regex;
 use ron::extensions::Extensions;
 use ron::Options;
 use serde::{Deserialize, Serialize};
 use crate::error::Error;
-use crate::images;
 use crate::images::OptimizationConfig;
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct Config {
-    pub extensions: Vec<String>,
+    pub extensions: Vec<Extension>,
     pub default_quality: f32,
-    pub default_format: String,
+    pub default_format: Extension,
     pub root: String,
     pub url: String,
     pub cache_directory: String,
@@ -42,6 +42,31 @@ pub struct Logger {
     pub level: Option<LevelFilter>,
 }
 
+#[derive(Deserialize, Serialize, Eq, PartialEq, Hash, Copy, Clone, Debug)]
+pub enum Extension {
+    JPEG,
+    WEBP,
+    AVIF,
+}
+
+impl Extension {
+    pub fn image_format(&self) -> ImageFormat {
+        match self {
+            Extension::JPEG => ImageFormat::Jpeg,
+            Extension::WEBP => ImageFormat::WebP,
+            Extension::AVIF => ImageFormat::Avif,
+        }
+    }
+
+    pub fn mime(&self) -> &'static str {
+        self.image_format().to_mime_type()
+    }
+
+    pub fn extensions(&self) -> &'static [&'static str] {
+        self.image_format().extensions_str()
+    }
+}
+
 impl Config {
     pub fn parse(path: Option<&str>) -> Result<Config, Error> {
         let path = path.unwrap_or("impress.ron").to_owned();
@@ -62,15 +87,6 @@ impl Config {
                 }
             }
 
-            let unsupported_extensions = config.extensions.iter()
-                .map(|extension| extension.as_str())
-                .filter(|extension| !images::supports(extension))
-                .collect::<Vec<&str>>();
-
-            if !unsupported_extensions.is_empty() {
-                return Error::err(format!("Unsupported extensions: {:?}", unsupported_extensions));
-            }
-
             Ok(config)
         } else {
             Error::err(format!("Unable to read config file {}", path))
@@ -81,9 +97,9 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            extensions: vec![String::from("webp")],
+            extensions: vec![Extension::AVIF],
             default_quality: 415.0,
-            default_format: String::from("jpeg"),
+            default_format: Extension::JPEG,
             root: String::from("/dev/null"),
             url: String::from("/media"),
             cache_directory: String::from("/tmp/impress"),
@@ -111,15 +127,20 @@ impl Size {
             true
         }
     }
-
 }
 
 impl OptimizationConfig {
-    pub fn new(config: &Config, size: &str, format: &str, autofilter: bool) -> OptimizationConfig {
+    pub fn new(config: &Config, size: &str, format: Extension, prefer_quality: bool) -> OptimizationConfig {
+        let quality = config.sizes.get(size).unwrap().quality.unwrap_or(config.default_quality);
+
         match format {
-            "webp" => OptimizationConfig::Webp {
-                quality: config.sizes.get(size).unwrap().quality.unwrap_or(config.default_quality),
-                autofilter,
+            Extension::WEBP => OptimizationConfig::Webp {
+                quality,
+                prefer_quality,
+            },
+            Extension::AVIF => OptimizationConfig::Avif {
+                quality,
+                prefer_quality,
             },
             _ => panic!("Unsupported extension"),
         }

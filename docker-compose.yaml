@@ -1,6 +1,7 @@
 services:
   vmod-impress:
     container_name: vmod-impress
+    image: vmod-impress
     build:
       context: ./docker
       dockerfile: Dockerfile

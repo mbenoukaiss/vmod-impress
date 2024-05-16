@@ -13,7 +13,7 @@ RUN apt update && \
     Pin: release o=packagecloud.io/varnishcache/* \
     Pin-Priority: 1000' > /etc/apt/preferences.d/varnishcache && \
     apt update && \
-    apt install varnish varnish-dev llvm jq python3-docutils clang -y && \
+    apt install varnish varnish-dev llvm jq python3-docutils clang meson ninja-build cmake nasm -y && \
     apt clean && rm -rf /var/lib/apt/lists/* && \
     groupadd -g $GROUP_ID defaultgroup && \
     useradd defaultuser -u $USER_ID -g $GROUP_ID -m -s /bin/sh && \

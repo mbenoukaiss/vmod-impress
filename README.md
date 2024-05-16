@@ -40,7 +40,7 @@ Create the `/etc/varnish/impress.ron` configuration file, the following is an ex
 configuration file, see below for more details :
 ```ron
 Config(
-    extensions: ["webp"],
+    extensions: ["avif", "webp"],
     default_format: "jpeg",
     default_quality: 70.0,
     root: "/var/www/media",
@@ -63,7 +63,8 @@ Config(
 
 ### Config
 The `Config` struct has the following fields :
-- `extensions` : List of supported image formats, currently only `webp` is supported
+- `extensions` : List of supported image formats, the order in the array defines the 
+priority, currently only `webp` and `avif` are supported
 - `default_format` : Default image format to use when the client does not support 
 any of the supported formats. Currently ignored and images do not get optimized when 
 falling back to this format, the original image format will be served

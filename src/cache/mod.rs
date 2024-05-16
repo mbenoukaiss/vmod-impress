@@ -14,7 +14,7 @@ use image::ImageFormat;
 use walkdir::WalkDir;
 use crate::backend::FileTransfer;
 use crate::cache::file_saver::CreateImageFile;
-use crate::config::Config;
+use crate::config::{Config, Extension};
 use crate::error::Error;
 use crate::images;
 use crate::images::OptimizationConfig;
@@ -75,7 +75,7 @@ impl Cache {
                         let mut path = PathBuf::from(&config.cache_directory);
                         path.push(&size);
                         path.push(stem);
-                        path.set_extension(extension);
+                        path.set_extension(extension.extensions().first().unwrap());
 
                         if path.exists() {
                             item.add(size.to_owned(), extension.to_owned(), path);
@@ -88,7 +88,7 @@ impl Cache {
         }
     }
 
-    pub fn get(&self, image_id: &str, size: &str, ext: &str) -> Result<Option<(FileTransfer, DateTime<Utc>)>, Error> {
+    pub fn get(&self, image_id: &str, size: &str, ext: Extension) -> Result<Option<(FileTransfer, DateTime<Utc>)>, Error> {
         let lock = self.data.read()?;
         let Some(cache) = lock.get(image_id) else {
             return Ok(None);
@@ -118,7 +118,7 @@ impl Cache {
         )))
     }
 
-    fn convert_image(&self, cache: &CacheImage, image_id: &str, size: &str, ext: &str) -> Result<Option<(FileTransfer, DateTime<Utc>)>, Error> {
+    fn convert_image(&self, cache: &CacheImage, image_id: &str, size: &str, ext: Extension) -> Result<Option<(FileTransfer, DateTime<Utc>)>, Error> {
         let image = images::read(&cache.base_image_path)?;
 
         let Some(format) = self.config.sizes.get(size) else {
@@ -135,7 +135,7 @@ impl Cache {
         let _ = self.create_image_tx.send(CreateImageFile {
             image_id: image_id.to_owned(),
             size: size.to_owned(),
-            extension: ext.to_owned(),
+            extension: ext,
             data: optimized.data().to_vec(),
             last_modified: Some(modified.into()),
         });
@@ -147,7 +147,7 @@ impl Cache {
 #[derive(Clone, Debug)]
 pub struct CacheImage {
     pub base_image_path: String,
-    pub optimized: HashMap<(String, String), String>, //associating size and extension to the path
+    pub optimized: HashMap<(String, Extension), String>, //associating size and extension to the path
 }
 
 impl CacheImage {
@@ -158,11 +158,11 @@ impl CacheImage {
         }
     }
 
-    pub fn add<P: AsRef<Path>>(&mut self, size: String, ext: String, path: P) {
+    pub fn add<P: AsRef<Path>>(&mut self, size: String, ext: Extension, path: P) {
         self.optimized.insert((size, ext), path.as_ref().to_string_lossy().to_string());
     }
 
-    pub fn get(&self, size: &str, ext: &str) -> Option<&String> {
-        self.optimized.get(&(size.to_string(), ext.to_string()))
+    pub fn get(&self, size: &str, ext: Extension) -> Option<&String> {
+        self.optimized.get(&(size.to_string(), ext))
     }
 }

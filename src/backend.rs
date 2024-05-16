@@ -7,7 +7,7 @@ use varnish::vcl::backend::{Serve, Transfer};
 use varnish::vcl::ctx::Ctx;
 use varnish::vcl::http::HTTP;
 use crate::cache::Cache;
-use crate::config::Config;
+use crate::config::{Config, Extension};
 use crate::error::Error;
 use crate::images::OptimizedImage;
 
@@ -52,7 +52,7 @@ impl FileBackend {
             beresp.set_header("etag", &etag)?;
             beresp.set_header("last-modified", &last_modified.format("%a, %d %b %Y %H:%M:%S GMT").to_string())?;
             beresp.set_header("content-length", &data.size().to_string())?;
-            beresp.set_header("content-type", "image/webp")?;
+            beresp.set_header("content-type", extension.mime())?;
 
             if bereq_method != "HEAD" && bereq_method != "GET" {
                 beresp.set_status(405);
@@ -70,18 +70,20 @@ impl FileBackend {
         Ok(transfer)
     }
 
-    fn get_best_extension(&self, bereq: &HTTP) -> &str {
+    fn get_best_extension(&self, bereq: &HTTP) -> Extension {
         let Some(accept) = bereq.header("accept") else {
-            return &self.config.default_format;
+            return self.config.default_format;
         };
 
-        for ext in &self.config.extensions {
-            if accept.contains(ext) {
-                return ext;
+        for format in &self.config.extensions {
+            for extension in format.extensions() {
+                if accept.contains(extension) {
+                    return *format;
+                }
             }
         }
 
-        &self.config.default_format
+        self.config.default_format
     }
 }
 
