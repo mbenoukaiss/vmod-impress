@@ -27,7 +27,7 @@ pub fn spawn(config: Config, data: CacheData, create_image_tx: Sender<CreateImag
                 }
 
                 if !cache.optimized.contains_key(&(size_name.to_owned(), extension)) {
-                    let optimization_config = OptimizationConfig::new(&config, size_name, extension, true);
+                    let optimization_config = OptimizationConfig::new(size, extension, true);
 
                     let cache = cache.clone();
                     let image_id = image_id.to_owned();

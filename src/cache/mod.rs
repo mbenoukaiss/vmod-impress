@@ -125,7 +125,7 @@ impl Cache {
             return Error::err("Size not found in config");
         };
 
-        let optimization_config = OptimizationConfig::new(&self.config, size, ext, false);
+        let optimization_config = OptimizationConfig::new(format, ext, false);
         let image = images::resize(&image, format.width, format.height);
         let optimized = images::optimize(&image, optimization_config)?;
         let modified = Utc::now();

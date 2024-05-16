@@ -68,7 +68,7 @@ fn handle_modification(event: Event, config: &Config, data: &CacheData, create_i
         let base_image = images::read(&cache.base_image_path)?;
 
         for ((size_name, size), &format) in to_optimize {
-            let optimization_config = OptimizationConfig::new(&config, size_name, format, true);
+            let optimization_config = OptimizationConfig::new(size, format, true);
             let resized = images::resize(&base_image, size.width, size.height);
             let optimized = images::optimize(&resized, optimization_config)?;
 

@@ -40,14 +40,14 @@ Create the `/etc/varnish/impress.ron` configuration file, the following is an ex
 configuration file, see below for more details :
 ```ron
 Config(
-    extensions: ["avif", "webp"],
-    default_format: "jpeg",
-    default_quality: 70.0,
+    extensions: [AVIF, WEBP],
+    default_format: JPEG,
+    qualities: {WEBP: 70, AVIF: 40},
     root: "/var/www/media",
     url: "/media/{size}/{path}.{ext}",
     cache_directory: "/var/cache/varnish",
     sizes: {
-        "low": Size(width: 300, height: 300),
+        "low": Size(width: 300, height: 300, qualities: {WEBP: 90, JPEG: 100}),
         "medium": Size(width: 600, height: 600),
         "high": Size(width: 1200, height: 1200),
         "product": Size(width: 546, height: 302, pattern: "^products/", pre_optimize: true),
@@ -68,7 +68,8 @@ priority, currently only `webp` and `avif` are supported
 - `default_format` : Default image format to use when the client does not support 
 any of the supported formats. Currently ignored and images do not get optimized when 
 falling back to this format, the original image format will be served
-- `default_quality` : Default image quality when compressing images
+- `qualities` : Quality when compressing images the default value is `{AVIF: 40, WEBP: 70, JPEG: 90}`. 
+Can be overriden in the size configuration
 - `root` : Root directory where images are stored
 - `url` : URL pattern to match and extract the image size, path and extension from
 - `cache_directory` : Directory to store the optimized and resized images
@@ -79,7 +80,8 @@ falling back to this format, the original image format will be served
 You can add multiple sizes to the `sizes` map, each size has the following fields :
 - `width` : Maximum width to resize the image to
 - `height` : Maximum height to resize the image to
-- `quality` : Quality to use when compressing the image
+- `qualities` : Quality when compressing images the default value is `{AVIF: 40, WEBP: 70, JPEG: 90}`. 
+Overrides the qualities specified in the `Config` object
 - `pattern` : Regex pattern to match the `{path}` variable in the URL pattern, if 
 the path does not match a 404 will be returned
 - `pre_optimize` : If set to true, a thread will be spawned to optimize all the 

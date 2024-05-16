@@ -5,14 +5,13 @@ use log::LevelFilter;
 use regex::Regex;
 use ron::extensions::Extensions;
 use ron::Options;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use crate::error::Error;
 use crate::images::OptimizationConfig;
 
-#[derive(Deserialize, Serialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct Config {
     pub extensions: Vec<Extension>,
-    pub default_quality: f32,
     pub default_format: Extension,
     pub root: String,
     pub url: String,
@@ -21,29 +20,37 @@ pub struct Config {
     pub sizes: HashMap<String, Size>,
     pub logger: Option<Logger>,
 
-    #[serde(skip_deserializing, skip_serializing)]
+    #[serde(skip_deserializing)]
     pub url_regex: Option<Regex>,
+
+    #[serde(rename = "qualities")]
+    pub quality_serialized: Option<HashMap<Extension, f32>>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct Size {
     pub width: u32,
     pub height: u32,
-    pub quality: Option<f32>,
+    #[serde(skip_deserializing)]
+    pub quality: [f32; 3],
     pub pattern: Option<String>,
     pub pre_optimize: Option<bool>,
 
-    #[serde(skip_deserializing, skip_serializing)]
+    #[serde(skip_deserializing)]
     pub pattern_regex: Option<Regex>,
+
+    #[serde(rename = "qualities")]
+    pub quality_serialized: Option<HashMap<Extension, f32>>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct Logger {
     pub path: String,
     pub level: Option<LevelFilter>,
 }
 
-#[derive(Deserialize, Serialize, Eq, PartialEq, Hash, Copy, Clone, Debug)]
+#[derive(Deserialize, Eq, PartialEq, Hash, Copy, Clone, Debug)]
+#[repr(u8)]
 pub enum Extension {
     JPEG,
     WEBP,
@@ -51,6 +58,22 @@ pub enum Extension {
 }
 
 impl Extension {
+    pub fn values() -> [Extension; 3] {
+        return [
+            Extension::JPEG,
+            Extension::WEBP,
+            Extension::AVIF,
+        ];
+    }
+
+    pub fn default_quality(&self) -> f32 {
+        match self {
+            Extension::JPEG => 90.0, //TODO find value
+            Extension::WEBP => 70.0,
+            Extension::AVIF => 40.0,
+        }
+    }
+
     pub fn image_format(&self) -> ImageFormat {
         match self {
             Extension::JPEG => ImageFormat::Jpeg,
@@ -82,11 +105,29 @@ impl Config {
                 .replace(r"\{path\}", r"(?<path>.+)")
                 .replace(r"\{ext\}", r"(?<ext>\w+)"))?);
 
-            for size in config.sizes.values_mut() {
+            for size in &mut config.sizes.values_mut() {
+                for extension in Extension::values() {
+                    let size_quality = size.quality_serialized.as_ref().and_then(|q| q.get(&extension));
+                    let config_quality = config.quality_serialized.as_ref().and_then(|q| q.get(&extension));
+
+                    size.quality[extension as usize] = if let Some(quality) = size_quality {
+                        *quality
+                    } else if let Some(quality) = config_quality {
+                        *quality
+                    } else {
+                        extension.default_quality()
+                    }
+                }
+
+                size.quality_serialized = None;
+
                 if let Some(pattern) = &size.pattern {
                     size.pattern_regex = Some(Regex::new(pattern)?)
                 }
             }
+
+            config.quality_serialized = None;
+
 
             Ok(config)
         } else {
@@ -99,7 +140,6 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             extensions: vec![Extension::AVIF],
-            default_quality: 415.0,
             default_format: Extension::JPEG,
             root: String::from("/dev/null"),
             url: String::from("/media"),
@@ -109,14 +149,16 @@ impl Default for Config {
                 (String::from("default"), Size {
                     width: 500,
                     height: 500,
-                    quality: None,
+                    quality: [0.0; 3],
                     pattern: None,
                     pre_optimize: None,
                     pattern_regex: None,
+                    quality_serialized: None,
                 }),
             ]),
             logger: None,
             url_regex: None,
+            quality_serialized: None,
         }
     }
 }
@@ -132,8 +174,8 @@ impl Size {
 }
 
 impl OptimizationConfig {
-    pub fn new(config: &Config, size: &str, format: Extension, prefer_quality: bool) -> OptimizationConfig {
-        let quality = config.sizes.get(size).unwrap().quality.unwrap_or(config.default_quality);
+    pub fn new(size: &Size, format: Extension, prefer_quality: bool) -> OptimizationConfig {
+        let quality = size.quality[format as usize];
 
         match format {
             Extension::WEBP => OptimizationConfig::Webp {

@@ -1,15 +1,12 @@
 Config(
-    extensions: [AVIF, WEBP],
+    extensions: [WEBP],
     default_format: JPEG,
-    default_quality: 70.0,
-    root: "/build/media",
-    url: "/media/{size}/{path}.{ext}",
+    root: "/build/media2",
+    url: "/test/images/p/media/image/{path}.{ext}?p={size}&type=product",
     cache_directory: "/build/cache",
+    pre_optimizer_threads: 2,
     sizes: {
-        "low": Size(width: 300, height: 300),
-        "medium": Size(width: 600, height: 600),
-        "high": Size(width: 1200, height: 1200),
-        "product": Size(width: 546, height: 302, pattern: "^products/", pre_optimize: true),
+        "image_product": Size(width: 600, height: 400, pattern: "^products/", pre_optimize: true),
     },
     logger: Logger(
         path: "/build/debug/impress.log",
