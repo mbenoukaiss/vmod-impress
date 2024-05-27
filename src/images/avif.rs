@@ -4,24 +4,11 @@ use crate::images::OptimizedImage;
 
 pub struct Avif {
     data: AvifData<'static>,
-    consumed: usize,
 }
 
 impl OptimizedImage for Avif {
     fn data(&self) -> &[u8] {
         self.data.as_slice()
-    }
-
-    fn take(&mut self, len: usize) -> &[u8] {
-        let start = self.consumed;
-        let end = (self.consumed + len).min(self.data.len());
-
-        self.consumed += len;
-        &self.data[start..end]
-    }
-
-    fn remaining(&self) -> usize {
-        self.data.len() - self.consumed
     }
 }
 
@@ -29,7 +16,6 @@ impl Into<Avif> for AvifData<'static> {
     fn into(self) -> Avif {
         Avif {
             data: self,
-            consumed: 0,
         }
     }
 }

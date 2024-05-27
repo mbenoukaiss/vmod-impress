@@ -82,10 +82,6 @@ impl Extension {
         }
     }
 
-    pub fn mime(&self) -> &'static str {
-        self.image_format().to_mime_type()
-    }
-
     pub fn extensions(&self) -> &'static [&'static str] {
         self.image_format().extensions_str()
     }
@@ -186,7 +182,10 @@ impl OptimizationConfig {
                 quality,
                 prefer_quality,
             },
-            _ => panic!("Unsupported extension"),
+            Extension::JPEG => OptimizationConfig::Jpeg {
+                quality,
+                prefer_quality,
+            },
         }
     }
 }

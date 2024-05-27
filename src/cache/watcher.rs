@@ -1,18 +1,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
-use std::{fs, sync, thread};
+use std::{fs, mem, sync, thread};
 use std::collections::HashMap;
 use itertools::Itertools;
 use notify::{Config as NotifyConfig, Error as NotifyError, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use notify::event::{AccessKind, AccessMode, ModifyKind, RemoveKind, RenameMode};
 use crate::cache::{CacheData, CacheImage};
-use crate::cache::file_saver::CreateImageFile;
+use crate::cache::file_saver::OptimizeImage;
 use crate::config::Config;
 use crate::error::Error;
-use crate::images;
-use crate::images::OptimizationConfig;
 
-pub fn spawn(config: Config, data: CacheData, create_image_tx: Sender<CreateImageFile>) {
+pub fn spawn(config: Config, data: CacheData, create_image_tx: Sender<OptimizeImage>) {
     thread::spawn(move || {
         let (tx, rx) = sync::mpsc::channel();
 
@@ -23,7 +21,7 @@ pub fn spawn(config: Config, data: CacheData, create_image_tx: Sender<CreateImag
     });
 }
 
-fn event_handler(config: Config, data: CacheData, rx: Receiver<Result<Event, NotifyError>>, create_image_tx: Sender<CreateImageFile>) {
+fn event_handler(config: Config, data: CacheData, rx: Receiver<Result<Event, NotifyError>>, create_image_tx: Sender<OptimizeImage>) {
     while let Ok(result) = rx.recv() {
         match result {
             Ok(event) => {
@@ -44,42 +42,38 @@ fn event_handler(config: Config, data: CacheData, rx: Receiver<Result<Event, Not
     }
 }
 
-fn handle_modification(event: Event, config: &Config, data: &CacheData, create_image_tx: Sender<CreateImageFile>) -> Result<(), Error> {
+fn handle_modification(event: Event, config: &Config, data: &CacheData, create_image_tx: Sender<OptimizeImage>) -> Result<(), Error> {
     let image_path = get_image_path(&event)?;
     let image_id = get_image_id(&image_path, &config);
 
-    let mut lock = data.write().unwrap();
+    let to_delete = {
+        let mut lock = data.write().unwrap();
 
-    if !lock.contains_key(&image_id) {
-        lock.insert(image_id.clone(), CacheImage::new(image_path.to_owned()));
+        if !lock.contains_key(&image_id) {
+            lock.insert(image_id.clone(), CacheImage::new(image_path.to_owned()));
+        }
+
+        if let Some(cache) = lock.get_mut(&image_id) {
+            mem::take(&mut cache.optimized)
+        } else {
+            HashMap::new()
+        }
+    };
+
+    for path in to_delete.values() {
+        fs::remove_file(path)?;
     }
 
-    if let Some(cache) = lock.get_mut(&image_id) {
-        for path in cache.optimized.values() {
-            fs::remove_file(path)?;
-        }
+    let to_optimize = config.sizes.iter()
+        .filter(|(_, size)| size.matches(&image_id) && size.pre_optimize.unwrap_or(false))
+        .cartesian_product(config.extensions.iter());
 
-        cache.optimized = HashMap::new();
-
-        let to_optimize = config.sizes.iter()
-            .filter(|(_, size)| size.matches(&image_id) && size.pre_optimize.unwrap_or(false))
-            .cartesian_product(config.extensions.iter());
-
-        let base_image = images::read(&cache.base_image_path)?;
-
-        for ((size_name, size), &format) in to_optimize {
-            let optimization_config = OptimizationConfig::new(size, format, true);
-            let resized = images::resize(&base_image, size.width, size.height);
-            let optimized = images::optimize(&resized, optimization_config)?;
-
-            create_image_tx.send(CreateImageFile {
-                image_id: image_id.clone(),
-                size: size_name.clone(),
-                extension: format,
-                data: optimized.data().to_vec(),
-                last_modified: None,
-            }).unwrap();
-        }
+    for ((size_name, _), &format) in to_optimize {
+        create_image_tx.send(OptimizeImage {
+            image_id: image_id.clone(),
+            size: size_name.clone(),
+            extension: format,
+        }).unwrap();
     }
 
     Ok(())
@@ -89,9 +83,9 @@ fn handle_deletion(event: Event, config: &Config, data: &CacheData) -> Result<()
     let image_path = get_image_path(&event)?;
     let image_id = get_image_id(&image_path, &config);
 
-    let mut lock = data.write().unwrap();
+    let image = data.write().unwrap().remove(&image_id);
 
-    if let Some(image) = lock.remove(&image_id) {
+    if let Some(image) = image {
         for (_, path) in image.optimized {
             fs::remove_file(path)?;
         }

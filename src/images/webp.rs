@@ -5,24 +5,11 @@ use crate::images::OptimizedImage;
 
 pub struct Webp {
     data: WebPMemory,
-    consumed: usize,
 }
 
 impl OptimizedImage for Webp {
     fn data(&self) -> &[u8] {
         self.data.as_ref()
-    }
-
-    fn take(&mut self, len: usize) -> &[u8] {
-        let start = self.consumed;
-        let end = (self.consumed + len).min(self.data.len());
-
-        self.consumed += len;
-        &self.data[start..end]
-    }
-
-    fn remaining(&self) -> usize {
-        self.data.len() - self.consumed
     }
 }
 
@@ -30,7 +17,6 @@ impl Into<Webp> for WebPMemory {
     fn into(self) -> Webp {
         Webp {
             data: self,
-            consumed: 0,
         }
     }
 }

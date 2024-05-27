@@ -1,7 +1,7 @@
 use std::error::Error as StdError;
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Take};
 use chrono::{DateTime, Utc};
 use varnish::vcl::backend::{Serve, Transfer};
 use varnish::vcl::ctx::Ctx;
@@ -9,7 +9,6 @@ use varnish::vcl::http::HTTP;
 use crate::cache::Cache;
 use crate::config::{Config, Extension};
 use crate::error::Error;
-use crate::images::OptimizedImage;
 
 pub struct FileBackend {
     config: Config,
@@ -37,13 +36,12 @@ impl FileBackend {
                 respond!(ctx, 404);
             }
 
-            let extension = self.get_best_extension(bereq);
-            let Some((data, last_modified)) = self.cache.get(&captures["path"], &captures["size"], extension)? else {
+            let extensions = self.get_supported_extensions(bereq);
+            let Some((data, last_modified, mime)) = self.cache.get(&captures["path"], &captures["size"], extensions)? else {
                 respond!(ctx, 404);
             };
 
             let (is_304, etag) = process_cache_headers(&bereq, &captures["path"], data.size(), &last_modified);
-
             if is_304 {
                 beresp.set_status(304);
             }
@@ -52,7 +50,7 @@ impl FileBackend {
             beresp.set_header("etag", &etag)?;
             beresp.set_header("last-modified", &last_modified.format("%a, %d %b %Y %H:%M:%S GMT").to_string())?;
             beresp.set_header("content-length", &data.size().to_string())?;
-            beresp.set_header("content-type", extension.mime())?;
+            beresp.set_header("content-type", mime)?;
 
             if bereq_method != "HEAD" && bereq_method != "GET" {
                 beresp.set_status(405);
@@ -70,20 +68,28 @@ impl FileBackend {
         Ok(transfer)
     }
 
-    fn get_best_extension(&self, bereq: &HTTP) -> Extension {
+    fn get_supported_extensions(&self, bereq: &HTTP) -> Vec<Extension> {
         let Some(accept) = bereq.header("accept") else {
-            return self.config.default_format;
+            return vec![self.config.default_format];
         };
 
-        for format in &self.config.extensions {
-            for extension in format.extensions() {
-                if accept.contains(extension) {
-                    return *format;
-                }
+        let mut extensions = Vec::with_capacity(3);
+        for extension in &self.config.extensions {
+            let supports_format = extension.extensions()
+                .into_iter()
+                .find(|&&ext| accept.contains(ext))
+                .is_some();
+
+            if supports_format {
+                extensions.push(*extension);
             }
         }
 
-        self.config.default_format
+        if !extensions.contains(&self.config.default_format) {
+            extensions.push(self.config.default_format);
+        }
+
+        extensions
     }
 }
 
@@ -106,36 +112,25 @@ impl Serve<FileTransfer> for FileBackend<> {
     }
 }
 
-pub enum FileTransfer {
-    File(BufReader<File>, usize),
-    Memory(Box<dyn OptimizedImage>),
-}
+pub struct FileTransfer(Take<BufReader<File>>);
 
 impl FileTransfer {
-    #[inline]
+    pub fn new(file: File, size: u64) -> FileTransfer {
+        FileTransfer(BufReader::new(file).take(size))
+    }
+
     pub fn size(&self) -> usize {
-        match self {
-            FileTransfer::File(_, len) => *len,
-            FileTransfer::Memory(data) => data.remaining(),
-        }
+        self.0.limit() as usize
     }
 }
 
 impl Transfer for FileTransfer {
-    fn read(&mut self,  buf: &mut [u8]) -> Result<usize, Box<dyn StdError>> {
-        let written_bytes = match self {
-            FileTransfer::File(file, _) => file.read(buf)?,
-            FileTransfer::Memory(data) => data.take(buf.len()).read(buf)?,
-        };
-
-        Ok(written_bytes)
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Box<dyn StdError>> {
+        self.0.read(buf).map_err(|e| e.into())
     }
 
     fn len(&self) -> Option<usize> {
-        match self {
-            FileTransfer::File(_, len) => Some(*len),
-            FileTransfer::Memory(data) => Some(data.data().len()),
-        }
+        Some(self.size())
     }
 }
 

@@ -4,7 +4,6 @@ mod watcher;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::BufReader;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc, RwLock};
@@ -13,11 +12,9 @@ use chrono::{DateTime, Utc};
 use image::ImageFormat;
 use walkdir::WalkDir;
 use crate::backend::FileTransfer;
-use crate::cache::file_saver::CreateImageFile;
+use crate::cache::file_saver::OptimizeImage;
 use crate::config::{Config, Extension};
 use crate::error::Error;
-use crate::images;
-use crate::images::OptimizationConfig;
 use crate::utils;
 
 pub type CacheData = Arc<RwLock<HashMap<String, CacheImage>>>;
@@ -25,7 +22,7 @@ pub type CacheData = Arc<RwLock<HashMap<String, CacheImage>>>;
 pub struct Cache {
     config: Config,
     data: CacheData,
-    create_image_tx: Sender<CreateImageFile>,
+    create_image_tx: Sender<OptimizeImage>,
 }
 
 impl Cache {
@@ -88,59 +85,49 @@ impl Cache {
         }
     }
 
-    pub fn get(&self, image_id: &str, size: &str, ext: Extension) -> Result<Option<(FileTransfer, DateTime<Utc>)>, Error> {
+    pub fn get(&self, image_id: &str, size: &str, supported_extensions: Vec<Extension>) -> Result<Option<(FileTransfer, DateTime<Utc>, &'static str)>, Error> {
         let lock = self.data.read()?;
         let Some(cache) = lock.get(image_id) else {
             return Ok(None);
         };
 
+        for ext in supported_extensions {
+            if let Some(file) = cache.get(size, ext) {
+                let mut path = PathBuf::from(&self.config.root);
+                path.push(file);
 
-        if let Some(file) = cache.get(size, ext) {
-            let mut path = PathBuf::from(&self.config.root);
-            path.push(file);
-
-            if let Ok(file) = File::open(path) {
-                self.read_image(file)
+                if path.exists() {
+                    return self.read_image(path.to_str().unwrap());
+                } else {
+                    let _ = self.create_image_tx.send(OptimizeImage {
+                        image_id: image_id.to_owned(),
+                        size: size.to_owned(),
+                        extension: ext,
+                    });
+                }
             } else {
-                self.convert_image(cache, image_id, size, ext)
+                let _ = self.create_image_tx.send(OptimizeImage {
+                    image_id: image_id.to_owned(),
+                    size: size.to_owned(),
+                    extension: ext,
+                });
             }
-        } else {
-            self.convert_image(cache, image_id, size, ext)
         }
+
+        //return the image as is, it will be optimized later
+        self.read_image(&cache.base_image_path)
     }
 
-    fn read_image(&self, file: File) -> Result<Option<(FileTransfer, DateTime<Utc>)>, Error> {
+    fn read_image(&self, path: &str) -> Result<Option<(FileTransfer, DateTime<Utc>, &'static str)>, Error> {
+        let file = File::open(path)?;
         let metadata = file.metadata()?;
+        let format = ImageFormat::from_path(path)?;
 
         Ok(Some((
-            FileTransfer::File(BufReader::new(file), metadata.len() as usize),
+            FileTransfer::new(file, metadata.len()),
             DateTime::from(metadata.modified()?),
+            format.to_mime_type(),
         )))
-    }
-
-    fn convert_image(&self, cache: &CacheImage, image_id: &str, size: &str, ext: Extension) -> Result<Option<(FileTransfer, DateTime<Utc>)>, Error> {
-        let image = images::read(&cache.base_image_path)?;
-
-        let Some(format) = self.config.sizes.get(size) else {
-            return Error::err("Size not found in config");
-        };
-
-        let optimization_config = OptimizationConfig::new(format, ext, false);
-        let image = images::resize(&image, format.width, format.height);
-        let optimized = images::optimize(&image, optimization_config)?;
-        let modified = Utc::now();
-
-        //if this fails, the images saving thread has crashed, images that have never
-        //been loaded will have poor performances but continue serving images on the fly
-        let _ = self.create_image_tx.send(CreateImageFile {
-            image_id: image_id.to_owned(),
-            size: size.to_owned(),
-            extension: ext,
-            data: optimized.data().to_vec(),
-            last_modified: Some(modified.into()),
-        });
-
-        Ok(Some((FileTransfer::Memory(optimized), modified)))
     }
 }
 

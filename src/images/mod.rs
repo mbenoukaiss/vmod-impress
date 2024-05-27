@@ -1,5 +1,6 @@
 mod avif;
 mod webp;
+mod jpeg;
 
 use std::fs;
 use std::fs::File;
@@ -24,10 +25,13 @@ pub fn resize(image: &DynamicImage, width: u32, height: u32) -> DynamicImage {
 }
 
 pub fn optimize(image: &DynamicImage, config: OptimizationConfig) -> Result<Box<dyn OptimizedImage>, Error> {
-    match config {
-        OptimizationConfig::Webp { quality, prefer_quality } => Ok(Box::new(webp::to_webp(&image, quality, prefer_quality))),
-        OptimizationConfig::Avif { quality, prefer_quality } => Ok(Box::new(avif::to_avif(&image, quality, prefer_quality)))
-    }
+    let optimized: Box<dyn OptimizedImage> = match config {
+        OptimizationConfig::Webp { quality, prefer_quality } => Box::new(webp::to_webp(&image, quality, prefer_quality)),
+        OptimizationConfig::Avif { quality, prefer_quality } => Box::new(avif::to_avif(&image, quality, prefer_quality)),
+        OptimizationConfig::Jpeg { quality, prefer_quality } => Box::new(jpeg::to_jpeg(&image, quality, prefer_quality)?),
+    };
+
+    Ok(optimized)
 }
 
 pub fn write<T>(path: T, data: &[u8], last_modified: Option<SystemTime>) -> Result<(), Error> where T: AsRef<Path> {
@@ -46,10 +50,9 @@ pub fn write<T>(path: T, data: &[u8], last_modified: Option<SystemTime>) -> Resu
 pub enum OptimizationConfig {
     Webp { quality: f32, prefer_quality: bool },
     Avif { quality: f32, prefer_quality: bool },
+    Jpeg { quality: f32, prefer_quality: bool },
 }
 
 pub trait OptimizedImage {
     fn data(&self) -> &[u8];
-    fn take(&mut self, len: usize) -> &[u8];
-    fn remaining(&self) -> usize;
 }
