@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use image::ImageFormat;
 use walkdir::WalkDir;
 use crate::backend::FileTransfer;
-use crate::cache::file_saver::CreateImageFile;
+use crate::cache::file_saver::OptimizeImage;
 use crate::config::{Config, Extension};
 use crate::error::Error;
 use crate::images;
@@ -25,7 +25,7 @@ pub type CacheData = Arc<RwLock<HashMap<String, CacheImage>>>;
 pub struct Cache {
     config: Config,
     data: CacheData,
-    create_image_tx: Sender<CreateImageFile>,
+    create_image_tx: Sender<OptimizeImage>,
 }
 
 impl Cache {
@@ -88,25 +88,34 @@ impl Cache {
         }
     }
 
-    pub fn get(&self, image_id: &str, size: &str, ext: Extension) -> Result<Option<(FileTransfer, DateTime<Utc>)>, Error> {
+    pub fn get(&self, image_id: &str, size: &str, supported_extensions: Vec<Extension>) -> Result<Option<(FileTransfer, DateTime<Utc>)>, Error> {
         let lock = self.data.read()?;
         let Some(cache) = lock.get(image_id) else {
             return Ok(None);
         };
 
+        let mut to_generate = Vec::new();
+        let mut im
+        for ext in supported_extensions {
+            if let Some(file) = cache.get(size, ext) {
+                let mut path = PathBuf::from(&self.config.root);
+                path.push(file);
 
-        if let Some(file) = cache.get(size, ext) {
-            let mut path = PathBuf::from(&self.config.root);
-            path.push(file);
+                if let Ok(file) = File::open(path) {
+                    for extension in to_generate {
+                        //...
+                    }
 
-            if let Ok(file) = File::open(path) {
-                self.read_image(file)
+                    return self.read_image(file);
+                } else {
+                    to_generate.push(ext);
+                }
             } else {
-                self.convert_image(cache, image_id, size, ext)
+                to_generate.push(ext);
             }
-        } else {
-            self.convert_image(cache, image_id, size, ext)
         }
+
+        Ok(None)
     }
 
     fn read_image(&self, file: File) -> Result<Option<(FileTransfer, DateTime<Utc>)>, Error> {
@@ -132,12 +141,10 @@ impl Cache {
 
         //if this fails, the images saving thread has crashed, images that have never
         //been loaded will have poor performances but continue serving images on the fly
-        let _ = self.create_image_tx.send(CreateImageFile {
+        let _ = self.create_image_tx.send(OptimizeImage {
             image_id: image_id.to_owned(),
             size: size.to_owned(),
             extension: ext,
-            data: optimized.data().to_vec(),
-            last_modified: Some(modified.into()),
         });
 
         Ok(Some((FileTransfer::Memory(optimized), modified)))

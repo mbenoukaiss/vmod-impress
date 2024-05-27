@@ -15,7 +15,7 @@ RUN apt update && \
     apt update && \
     apt install varnish varnish-dev llvm jq python3-docutils clang meson ninja-build cmake nasm -y && \
     apt clean && rm -rf /var/lib/apt/lists/* && \
-    groupadd -g $GROUP_ID defaultgroup && \
+    groupadd -f -g $GROUP_ID defaultgroup && \
     useradd defaultuser -u $USER_ID -g $GROUP_ID -m -s /bin/sh && \
     mkdir /var/lib/varnish/varnishd && \
     chmod -R 777 /usr/lib/varnish/vmods /var/lib/varnish/varnishd

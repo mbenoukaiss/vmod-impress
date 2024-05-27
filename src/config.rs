@@ -186,6 +186,10 @@ impl OptimizationConfig {
                 quality,
                 prefer_quality,
             },
+            Extension::JPEG => OptimizationConfig::Avif {
+                quality,
+                prefer_quality,
+            },
             _ => panic!("Unsupported extension"),
         }
     }

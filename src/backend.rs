@@ -37,8 +37,8 @@ impl FileBackend {
                 respond!(ctx, 404);
             }
 
-            let extension = self.get_best_extension(bereq);
-            let Some((data, last_modified)) = self.cache.get(&captures["path"], &captures["size"], extension)? else {
+            let extensions = self.get_supported_extensions(bereq);
+            let Some((data, last_modified)) = self.cache.get(&captures["path"], &captures["size"], extensions)? else {
                 respond!(ctx, 404);
             };
 
@@ -52,7 +52,7 @@ impl FileBackend {
             beresp.set_header("etag", &etag)?;
             beresp.set_header("last-modified", &last_modified.format("%a, %d %b %Y %H:%M:%S GMT").to_string())?;
             beresp.set_header("content-length", &data.size().to_string())?;
-            beresp.set_header("content-type", extension.mime())?;
+            beresp.set_header("content-type", extensions.mime())?;
 
             if bereq_method != "HEAD" && bereq_method != "GET" {
                 beresp.set_status(405);
@@ -70,20 +70,28 @@ impl FileBackend {
         Ok(transfer)
     }
 
-    fn get_best_extension(&self, bereq: &HTTP) -> Extension {
+    fn get_supported_extensions(&self, bereq: &HTTP) -> Vec<Extension> {
         let Some(accept) = bereq.header("accept") else {
-            return self.config.default_format;
+            return vec![self.config.default_format];
         };
 
-        for format in &self.config.extensions {
-            for extension in format.extensions() {
-                if accept.contains(extension) {
-                    return *format;
-                }
+        let mut extensions = Vec::with_capacity(3);
+        for extension in &self.config.extensions {
+            let supports_format = extension.extensions()
+                .into_iter()
+                .find(|&&ext| accept.contains(ext))
+                .is_some();
+
+            if supports_format {
+                extensions.push(*extension);
             }
         }
 
-        self.config.default_format
+        if !extensions.contains(&self.config.default_format) {
+            extensions.push(self.config.default_format);
+        }
+
+        extensions
     }
 }
 

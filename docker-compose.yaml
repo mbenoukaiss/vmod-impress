@@ -10,7 +10,7 @@ services:
         GROUP_ID: ${GROUP_ID}
     platform: linux/amd64
     user: ${USER_ID}:${GROUP_ID}
-    ports: [5000:80]
+    ports: [21777:80]
     volumes:
       - .:/build:rw,cached
       - ./config:/etc/varnish:rw,cached
