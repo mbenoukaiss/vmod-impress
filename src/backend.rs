@@ -25,13 +25,13 @@ impl FileBackend {
     fn get_data(&self, ctx: &mut Ctx) -> Result<Option<FileTransfer>, Error> {
         let bereq = ctx.http_bereq.as_ref().unwrap();
         let bereq_method = bereq.method().unwrap_or("");
-        let bereq_url = bereq.url().unwrap();
+        let bereq_url = urlencoding::decode(bereq.url().unwrap())?;
         let beresp = ctx.http_beresp.as_mut().unwrap();
         let mut transfer = None;
 
         let pattern = self.config.url_regex.as_ref().expect("Badly initialized config");
 
-        if let Some(captures) = pattern.captures(bereq_url) {
+        if let Some(captures) = pattern.captures(bereq_url.as_ref()) {
             if !self.config.sizes.get(&captures["size"]).map_or(false, |p| p.matches(&captures["path"])) {
                 respond!(ctx, 404);
             }
