@@ -51,6 +51,7 @@ impl FileBackend {
             beresp.set_header("last-modified", &last_modified.format("%a, %d %b %Y %H:%M:%S GMT").to_string())?;
             beresp.set_header("content-length", &data.size().to_string())?;
             beresp.set_header("content-type", mime)?;
+            beresp.set_header("vary", "accept")?;
 
             if bereq_method != "HEAD" && bereq_method != "GET" {
                 beresp.set_status(405);

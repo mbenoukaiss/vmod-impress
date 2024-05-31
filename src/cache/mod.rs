@@ -8,6 +8,7 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc, RwLock};
 use std::sync::mpsc::Sender;
+use std::thread;
 use chrono::{DateTime, Utc};
 use image::ImageFormat;
 use walkdir::WalkDir;
@@ -30,10 +31,15 @@ impl Cache {
         let (tx, rx) = mpsc::channel();
         let data = CacheData::default();
 
-        Self::load_images(&config, data.clone());
-        file_saver::spawn(config.clone(), data.clone(), rx);
-        watcher::spawn(config.clone(), data.clone(), tx.clone());
-        pre_optimizer::spawn(config.clone(), data.clone(), tx.clone());
+        let thread_config = config.clone();
+        let thread_data = data.clone();
+        let thread_tx = tx.clone();
+        thread::spawn(move || {
+            Self::load_images(&thread_config, thread_data.clone());
+            file_saver::spawn(thread_config.clone(), thread_data.clone(), rx);
+            watcher::spawn(thread_config.clone(), thread_data.clone(), thread_tx.clone());
+            pre_optimizer::spawn(thread_config.clone(), thread_data.clone(), thread_tx.clone());
+        });
 
         Cache {
             config: config.clone(),
