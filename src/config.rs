@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fs;
 use image::ImageFormat;
 use log::LevelFilter;
+use mediatype::MediaType;
+use mediatype::names::{AVIF, IMAGE, JPEG, WEBP};
 use regex::Regex;
 use ron::extensions::Extensions;
 use ron::Options;
@@ -64,6 +66,23 @@ impl Extension {
             Extension::WEBP,
             Extension::AVIF,
         ];
+    }
+
+    pub fn to_media_type(&self) -> MediaType {
+        match self {
+            Extension::AVIF => MediaType::new(IMAGE, AVIF),
+            Extension::WEBP => MediaType::new(IMAGE, WEBP),
+            Extension::JPEG => MediaType::new(IMAGE, JPEG),
+        }
+    }
+
+    pub fn from_ext(value: &str) -> Option<Extension> {
+        match value.to_lowercase().as_str() {
+            "jpeg" | "jpg" => Some(Extension::JPEG),
+            "webp" => Some(Extension::WEBP),
+            "avif" => Some(Extension::AVIF),
+            _ => None,
+        }
     }
 
     pub fn default_quality(&self) -> f32 {

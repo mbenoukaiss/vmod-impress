@@ -5,12 +5,15 @@ mod watcher;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::ops::Deref;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc, RwLock};
 use std::sync::mpsc::Sender;
 use std::thread;
 use chrono::{DateTime, Utc};
+use headers_accept::Accept;
 use image::ImageFormat;
+use mediatype::MediaType;
 use walkdir::WalkDir;
 use crate::backend::FileTransfer;
 use crate::cache::file_saver::OptimizeImage;
@@ -91,49 +94,62 @@ impl Cache {
         }
     }
 
-    pub fn get(&self, image_id: &str, size: &str, supported_extensions: Vec<Extension>) -> Result<Option<(FileTransfer, DateTime<Utc>, &'static str)>, Error> {
+    pub fn get(&self, image_id: &str, size: &str, accept: Option<Accept>) -> Result<Option<FetchResult>, Error> {
         let lock = self.data.read()?;
         let Some(cache) = lock.get(image_id) else {
             return Ok(None);
         };
 
-        for ext in supported_extensions {
-            if let Some(file) = cache.get(size, ext) {
-                let mut path = PathBuf::from(&self.config.root);
-                path.push(file);
+        //convert unavailable extensions
+        for extension in self.config.extensions.iter().filter(|ext| !cache.has(size, **ext)) {
+            let _ = self.create_image_tx.send(OptimizeImage {
+                image_id: image_id.to_owned(),
+                size: size.to_owned(),
+                extension: *extension,
+            });
+        }
 
-                if path.exists() {
-                    return self.read_image(path.to_str().unwrap());
-                } else {
-                    let _ = self.create_image_tx.send(OptimizeImage {
-                        image_id: image_id.to_owned(),
-                        size: size.to_owned(),
-                        extension: ext,
-                    });
-                }
+        let converted_extensions = self.config.extensions.iter()
+            .filter(|ext| cache.has(size, **ext))
+            .map(|ext| ext.to_media_type())
+            .collect::<Vec<MediaType>>();
+
+        let appropriate_extension = accept.as_ref()
+            .and_then(|accept| accept.negotiate(converted_extensions.iter()))
+            .and_then(|media_type| Extension::from_ext(media_type.subty.as_str()))
+            .unwrap_or(self.config.default_format);
+
+        if let Some(file) = cache.get(size, appropriate_extension) {
+            let mut path = PathBuf::from(&self.config.root);
+            path.push(file);
+
+            if path.exists() {
+                return self.read_image(path.to_str().unwrap(), true);
             } else {
                 let _ = self.create_image_tx.send(OptimizeImage {
                     image_id: image_id.to_owned(),
                     size: size.to_owned(),
-                    extension: ext,
+                    extension: appropriate_extension,
                 });
             }
         }
 
         //return the image as is, it will be optimized later
-        self.read_image(&cache.base_image_path)
+        self.read_image(&cache.base_image_path, false)
     }
 
-    fn read_image(&self, path: &str) -> Result<Option<(FileTransfer, DateTime<Utc>, &'static str)>, Error> {
+    fn read_image(&self, path: &str, is_optimized: bool) -> Result<Option<FetchResult>, Error> {
         let file = File::open(path)?;
         let metadata = file.metadata()?;
         let format = ImageFormat::from_path(path)?;
 
-        Ok(Some((
-            FileTransfer::new(file, metadata.len()),
-            DateTime::from(metadata.modified()?),
-            format.to_mime_type(),
-        )))
+        Ok(Some(FetchResult {
+            data: FileTransfer::new(file, metadata.len()),
+            last_modified: DateTime::from(metadata.modified() ? ),
+            inode: metadata.ino(),
+            mime: format.to_mime_type(),
+            is_optimized,
+        }))
     }
 }
 
@@ -158,4 +174,17 @@ impl CacheImage {
     pub fn get(&self, size: &str, ext: Extension) -> Option<&String> {
         self.optimized.get(&(size.to_string(), ext))
     }
+
+    pub fn has(&self, size: &str, ext: Extension) -> bool {
+        self.optimized.contains_key(&(size.to_string(), ext))
+    }
+}
+
+
+pub struct FetchResult {
+    pub data: FileTransfer,
+    pub last_modified: DateTime<Utc>,
+    pub inode: u64,
+    pub mime: &'static str,
+    pub is_optimized: bool,
 }

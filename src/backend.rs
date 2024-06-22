@@ -2,12 +2,14 @@ use std::error::Error as StdError;
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{BufReader, Read, Take};
-use chrono::{DateTime, Utc};
+use std::str::FromStr;
+use chrono::DateTime;
+use headers_accept::Accept;
 use varnish::vcl::backend::{Serve, Transfer};
 use varnish::vcl::ctx::Ctx;
 use varnish::vcl::http::HTTP;
-use crate::cache::Cache;
-use crate::config::{Config, Extension};
+use crate::cache::{Cache, FetchResult};
+use crate::config::Config;
 use crate::error::Error;
 
 pub struct FileBackend {
@@ -17,7 +19,10 @@ pub struct FileBackend {
 
 impl FileBackend {
     pub fn new(config: Config, cache: Cache) -> Self {
-        FileBackend { config, cache }
+        FileBackend {
+            config,
+            cache,
+        }
     }
 }
 
@@ -36,22 +41,27 @@ impl FileBackend {
                 respond!(ctx, 404);
             }
 
-            let extensions = self.get_supported_extensions(bereq);
-            let Some((data, last_modified, mime)) = self.cache.get(&captures["path"], &captures["size"], extensions)? else {
+            let accept = self.parse_accept_header(bereq);
+            let Some(result) = self.cache.get(&captures["path"], &captures["size"], accept)? else {
                 respond!(ctx, 404);
             };
 
-            let (is_304, etag) = process_cache_headers(&bereq, &captures["path"], data.size(), &last_modified);
+            let (is_304, etag) = process_cache_headers(&bereq, &result);
             if is_304 {
                 beresp.set_status(304);
             }
 
             beresp.set_proto("HTTP/1.1")?;
-            beresp.set_header("etag", &etag)?;
-            beresp.set_header("last-modified", &last_modified.format("%a, %d %b %Y %H:%M:%S GMT").to_string())?;
-            beresp.set_header("content-length", &data.size().to_string())?;
-            beresp.set_header("content-type", mime)?;
-            beresp.set_header("vary", "accept")?;
+            beresp.set_header("ETag", &etag)?;
+            beresp.set_header("Last-Modified", &result.last_modified.format("%a, %d %b %Y %H:%M:%S GMT").to_string())?;
+            beresp.set_header("Content-Length", &result.data.size().to_string())?;
+            beresp.set_header("Content-Type", result.mime)?;
+            beresp.set_header("Vary", "Accept")?;
+            beresp.set_header("Cache-Control", if result.is_optimized {
+                "public, max-age=31536000, immutable"
+            } else {
+                "no-cache"
+            })?;
 
             if bereq_method != "HEAD" && bereq_method != "GET" {
                 beresp.set_status(405);
@@ -59,7 +69,7 @@ impl FileBackend {
                 beresp.set_status(200);
 
                 if bereq_method == "GET" {
-                    transfer = Some(data);
+                    transfer = Some(result.data);
                 }
             }
         } else {
@@ -69,32 +79,15 @@ impl FileBackend {
         Ok(transfer)
     }
 
-    fn get_supported_extensions(&self, bereq: &HTTP) -> Vec<Extension> {
-        let Some(accept) = bereq.header("accept") else {
-            return vec![self.config.default_format];
-        };
-
-        let mut extensions = Vec::with_capacity(3);
-        for extension in &self.config.extensions {
-            let supports_format = extension.extensions()
-                .into_iter()
-                .find(|&&ext| accept.contains(ext))
-                .is_some();
-
-            if supports_format {
-                extensions.push(*extension);
-            }
+    fn parse_accept_header(&self, bereq: &HTTP) -> Option<Accept> {
+        match bereq.header("accept") {
+            Some(accept) if accept.trim() != "*/*" => Accept::from_str(accept).ok(),
+            _ => None
         }
-
-        if !extensions.contains(&self.config.default_format) {
-            extensions.push(self.config.default_format);
-        }
-
-        extensions
     }
 }
 
-impl Serve<FileTransfer> for FileBackend<> {
+impl Serve<FileTransfer> for FileBackend {
     fn get_type(&self) -> &str {
         "impress"
     }
@@ -135,8 +128,8 @@ impl Transfer for FileTransfer {
     }
 }
 
-fn process_cache_headers(bereq: &HTTP, path: &str, size: usize, last_modified: &DateTime<Utc>) -> (bool, String) {
-    let etag = generate_etag(path, size, &last_modified);
+fn process_cache_headers(bereq: &HTTP, result: &FetchResult) -> (bool, String) {
+    let etag = generate_etag(result);
 
     if let Some(inm) = bereq.header("if-none-match") {
         if inm == etag || (inm.starts_with("W/") && inm[2..] == etag) {
@@ -144,7 +137,7 @@ fn process_cache_headers(bereq: &HTTP, path: &str, size: usize, last_modified: &
         }
     } else if let Some(ims) = bereq.header("if-modified-since") {
         if let Ok(t) = DateTime::parse_from_rfc2822(ims) {
-            if t > *last_modified {
+            if t > result.last_modified {
                 return (true, etag);
             }
         }
@@ -153,8 +146,8 @@ fn process_cache_headers(bereq: &HTTP, path: &str, size: usize, last_modified: &
     return (false, etag);
 }
 
-fn generate_etag(path: &str, size: usize, last_modified: &DateTime<Utc>) -> String {
+fn generate_etag(result: &FetchResult) -> String {
     let mut h = DefaultHasher::new();
-    (path, size, last_modified).hash(&mut h);
+    (result.inode, result.data.size(), result.last_modified.timestamp(), result.is_optimized).hash(&mut h);
     h.finish().to_string()
 }
