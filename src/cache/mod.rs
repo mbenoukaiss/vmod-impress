@@ -59,16 +59,17 @@ impl Cache {
             .map(Deref::deref)
             .collect::<HashSet<&str>>();
 
-        let files = WalkDir::new(&config.root)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|e| !e.file_type().is_dir());
+        let files = config.roots.iter()
+            .flat_map(|root| WalkDir::new(root).into_iter()
+                .filter_map(Result::ok)
+                .filter(|e| !e.file_type().is_dir())
+                .map(|e| (root.clone(), e)));
 
-        for file in files {
+        for (root, file) in files {
             let filename = file.path().to_string_lossy().to_string();
-            let filename_without_root = file.path().strip_prefix(&config.root).unwrap().to_string_lossy().to_string();
+            let filename_without_root = file.path().strip_prefix(root).unwrap().to_str().unwrap();
 
-            if let (Some(stem), Some(extension)) = utils::decompose_filename(&filename_without_root) {
+            if let (Some(stem), Some(extension)) = utils::decompose_filename(filename_without_root) {
                 if !supported_extensions.contains(extension) {
                     continue;
                 }
@@ -120,12 +121,13 @@ impl Cache {
             .unwrap_or(self.config.default_format);
 
         if let Some(file) = cache.get(size, appropriate_extension) {
-            let mut path = PathBuf::from(&self.config.root);
-            path.push(file);
+            let path = Path::new(file);
 
             if path.exists() {
-                return self.read_image(path.to_str().unwrap(), true);
+                return self.read_image(file, true);
             } else {
+                //the image was in cache but the file did not exist,
+                //maybe it got deleted
                 let _ = self.create_image_tx.send(OptimizeImage {
                     image_id: image_id.to_owned(),
                     size: size.to_owned(),

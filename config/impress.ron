@@ -1,7 +1,7 @@
 Config(
     extensions: [AVIF, WEBP, JPEG],
     default_format: JPEG,
-    root: "/build/media",
+    roots: ["/build/media"],
     url: "/media/{size}/{path}[.{ext}]",
     cache_directory: "/build/cache",
     sizes: {

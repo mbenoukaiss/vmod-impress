@@ -15,7 +15,7 @@ use crate::images::OptimizationConfig;
 pub struct Config {
     pub extensions: Vec<Extension>,
     pub default_format: Extension,
-    pub root: String,
+    pub roots: Vec<String>,
     pub url: String,
     pub cache_directory: String,
     pub pre_optimizer_threads: Option<usize>,
@@ -164,7 +164,9 @@ impl Default for Config {
         Config {
             extensions: vec![Extension::AVIF],
             default_format: Extension::JPEG,
-            root: String::from("/dev/null"),
+            roots: vec![
+                String::from("/dev/null"),
+            ],
             url: String::from("/media"),
             cache_directory: String::from("/tmp/impress"),
             pre_optimizer_threads: None,

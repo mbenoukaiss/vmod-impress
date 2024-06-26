@@ -15,7 +15,9 @@ pub fn spawn(config: Config, data: CacheData, create_image_tx: Sender<OptimizeIm
         let (tx, rx) = sync::mpsc::channel();
 
         let mut watcher = RecommendedWatcher::new(tx, NotifyConfig::default()).unwrap();
-        watcher.watch(Path::new(&config.root), RecursiveMode::Recursive).unwrap();
+        for root in &config.roots {
+            watcher.watch(Path::new(root), RecursiveMode::Recursive).unwrap();
+        }
 
         event_handler(config, data, rx, create_image_tx);
     });
@@ -50,7 +52,7 @@ fn handle_modification(event: Event, config: &Config, data: &CacheData, create_i
         let mut lock = data.write().unwrap();
 
         if !lock.contains_key(&image_id) {
-            lock.insert(image_id.clone(), CacheImage::new(image_path.to_owned()));
+            lock.insert(image_id.to_string(), CacheImage::new(image_path.to_owned()));
         }
 
         if let Some(cache) = lock.get_mut(&image_id) {
@@ -106,8 +108,8 @@ fn get_image_id(path: &str, config: &Config) -> String {
     let mut image_id = PathBuf::from(path);
     image_id.set_extension("");
 
-    image_id.strip_prefix(&config.root)
-        .unwrap_or_else(|_| image_id.as_path())
-        .to_string_lossy()
-        .to_string()
+   config.roots.iter()
+       .fold(image_id.as_path(), |acc, root| acc.strip_prefix(root).unwrap_or(acc))
+       .to_string_lossy()
+       .to_string()
 }
