@@ -115,10 +115,18 @@ impl Config {
                 .with_default_extension(Extensions::IMPLICIT_SOME)
                 .from_str::<Config>(&config)?;
 
-            config.url_regex = Some(Regex::new(&format!(r"^{}$", regex::escape(&config.url))
+            let clean_url = format!(r"^{}$", regex::escape(&config.url))
                 .replace(r"\{size\}", r"(?<size>\w+)")
-                .replace(r"\{path\}", r"(?<path>.+)")
-                .replace(r"\{ext\}", r"(?<ext>\w+)"))?);
+                .replace(r"\{path\}", r"(?<path>[^\.]+)")
+                .replace(r"\{ext\}", r"(?<ext>\w+)")
+                .replace(r"\[", "(")
+                .replace(r"\]", ")?");
+
+            if clean_url.chars().filter(|c| *c == '[').count() != clean_url.chars().filter(|c| *c == ']').count() {
+                return Error::err(format!("Invalid URL pattern in config file {}", path));
+            }
+
+            config.url_regex = Some(Regex::new(&clean_url)?);
 
             for size in &mut config.sizes.values_mut() {
                 for extension in Extension::values() {
