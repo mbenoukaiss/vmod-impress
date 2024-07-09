@@ -17,10 +17,10 @@ macro_rules! debug_file {
 #[macro_export]
 macro_rules! debug_header {
     ($beresp:ident, $name:expr, $message:expr) => {
-        $beresp.set_header($name, $message.replace("\n", " "))?;
+        $beresp.set_header($name, &format!("{:#?}", $message).replace("\n", " "))?;
     };
-    (abort: $beresp:expr, $name:expr, $message:expr) => {
-        $beresp.set_header($name, $message.replace("\n", " "))?;
+    (abort: $beresp:ident, $name:expr, $message:expr) => {
+        debug_header!($beresp, $name, $message);
         return Ok(None);
     };
 }

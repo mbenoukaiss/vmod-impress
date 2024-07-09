@@ -33,7 +33,7 @@ struct Impress {
 
 impl Impress {
     pub fn new(ctx: &mut Ctx, vcl_name: &str, path: Option<&str>) -> Result<Self, Error> {
-        let config = Config::parse(path)?;
+        let config = Config::open(path)?;
         if let Some(logger) = &config.logger {
             setup_logging(logger);
         }

@@ -107,55 +107,67 @@ impl Extension {
 }
 
 impl Config {
-    pub fn parse(path: Option<&str>) -> Result<Config, Error> {
+    pub fn open(path: Option<&str>) -> Result<Config, Error> {
         let path = path.unwrap_or("impress.ron").to_owned();
 
         if let Ok(config) = fs::read_to_string(&path) {
-            let mut config = Options::default()
-                .with_default_extension(Extensions::IMPLICIT_SOME)
-                .from_str::<Config>(&config)?;
-
-            let clean_url = format!(r"^{}$", regex::escape(&config.url))
-                .replace(r"\{size\}", r"(?<size>\w+)")
-                .replace(r"\{path\}", r"(?<path>[^\.]+)")
-                .replace(r"\{ext\}", r"(?<ext>\w+)")
-                .replace(r"\[", "(")
-                .replace(r"\]", ")?");
-
-            if clean_url.chars().filter(|c| *c == '[').count() != clean_url.chars().filter(|c| *c == ']').count() {
-                return Error::err(format!("Invalid URL pattern in config file {}", path));
-            }
-
-            config.url_regex = Some(Regex::new(&clean_url)?);
-
-            for size in &mut config.sizes.values_mut() {
-                for extension in Extension::values() {
-                    let size_quality = size.quality_serialized.as_ref().and_then(|q| q.get(&extension));
-                    let config_quality = config.quality_serialized.as_ref().and_then(|q| q.get(&extension));
-
-                    size.quality[extension as usize] = if let Some(quality) = size_quality {
-                        *quality
-                    } else if let Some(quality) = config_quality {
-                        *quality
-                    } else {
-                        extension.default_quality()
-                    }
-                }
-
-                size.quality_serialized = None;
-
-                if let Some(pattern) = &size.pattern {
-                    size.pattern_regex = Some(Regex::new(pattern)?)
-                }
-            }
-
-            config.quality_serialized = None;
-
-
-            Ok(config)
+            Config::parse(config)
         } else {
             Error::err(format!("Unable to read config file {}", path))
         }
+    }
+
+    fn parse(config: String) -> Result<Config, Error> {
+        let mut config = Options::default()
+            .with_default_extension(Extensions::IMPLICIT_SOME)
+            .from_str::<Config>(&config)?;
+
+        config.url_regex = Some(Self::build_url_regex(&config.url)?);
+
+        for size in &mut config.sizes.values_mut() {
+            for extension in Extension::values() {
+                let size_quality = size.quality_serialized.as_ref().and_then(|q| q.get(&extension));
+                let config_quality = config.quality_serialized.as_ref().and_then(|q| q.get(&extension));
+
+                size.quality[extension as usize] = if let Some(quality) = size_quality {
+                    *quality
+                } else if let Some(quality) = config_quality {
+                    *quality
+                } else {
+                    extension.default_quality()
+                }
+            }
+
+            size.quality_serialized = None;
+
+            if let Some(pattern) = &size.pattern {
+                size.pattern_regex = Some(Regex::new(pattern)?)
+            }
+        }
+
+        config.quality_serialized = None;
+
+
+        Ok(config)
+    }
+
+    fn build_url_regex(url: &str) -> Result<Regex, Error> {
+        if !url.contains("{size}") || !url.contains("{path}") {
+            return Error::err("Arguments {size} and {path} are required in URL pattern");
+        }
+
+        let clean_url = format!(r"^{}$", regex::escape(url))
+            .replace(r"\{size\}", r"(?<size>\w+)")
+            .replace(r"\{path\}", r"(?<path>.+?)")
+            .replace(r"\{ext\}", r"(?<ext>[a-zA-Z0-9]+)")
+            .replace(r"\[", "(")
+            .replace(r"\]", ")?");
+
+        if clean_url.chars().filter(|c| *c == '(').count() != clean_url.chars().filter(|c| *c == ')').count() {
+            return Error::err("Invalid URL pattern in config file");
+        }
+
+        Ok(Regex::new(&clean_url)?)
     }
 }
 
@@ -216,5 +228,182 @@ impl OptimizationConfig {
                 prefer_quality,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_valid_config() {
+        let config_content = String::from(r#"
+        (
+            extensions: [AVIF, WEBP, JPEG],
+            default_format: JPEG,
+            roots: ["/build/media"],
+            url: "/media/{size}/{path}[.{ext}]",
+            cache_directory: "/build/cache",
+            sizes: {
+                "low": Size(width: 300, height: 300),
+                "medium": Size(width: 600, height: 600),
+                "high": Size(width: 1200, height: 1200),
+                "product": Size(width: 546, height: 302, pattern: "^products/", pre_optimize: true),
+            },
+            logger: Logger(
+                path: "/build/debug/impress.log",
+                level: WARN
+            ),
+        )
+        "#);
+
+        let config = Config::parse(config_content).expect("Failed to parse valid config");
+
+        assert_eq!(config.extensions, vec![Extension::AVIF, Extension::WEBP, Extension::JPEG]);
+        assert_eq!(config.default_format, Extension::JPEG);
+        assert_eq!(config.roots, vec!["/build/media".to_string()]);
+        assert_eq!(config.url, "/media/{size}/{path}[.{ext}]");
+        assert_eq!(config.cache_directory, "/build/cache".to_string());
+        assert!(config.sizes.contains_key("low"));
+        assert!(config.sizes.contains_key("medium"));
+        assert!(config.sizes.contains_key("high"));
+        assert!(config.sizes.contains_key("product"));
+        assert!(config.logger.is_some());
+        assert!(config.url_regex.is_some());
+    }
+
+    #[test]
+    fn test_parse_invalid_url_pattern() {
+        let config_content = String::from(r#"
+        (
+            extensions: [AVIF, WEBP, JPEG],
+            default_format: JPEG,
+            roots: ["/build/media"],
+            url: "/media/{size}/{path}[.{ext}[",
+            cache_directory: "/build/cache",
+            sizes: {
+                "low": Size(width: 300, height: 300),
+                "medium": Size(width: 600, height: 600),
+                "high": Size(width: 1200, height: 1200),
+                "product": Size(width: 546, height: 302, pattern: "^products/", pre_optimize: true),
+            },
+            logger: Logger(
+                path: "/build/debug/impress.log",
+                level: WARN
+            ),
+        )
+        "#);
+
+        let result = Config::parse(config_content);
+        assert!(result.is_err());
+        if let Err(err) = result {
+            assert_eq!(err.to_string(), "Invalid URL pattern in config file".to_string());
+        }
+    }
+
+    #[test]
+    fn test_parse_default_quality_values() {
+        let config_content = String::from(r#"
+        (
+            extensions: [AVIF, WEBP, JPEG],
+            default_format: JPEG,
+            roots: ["/build/media"],
+            url: "/media/{size}/{path}[.{ext}]",
+            cache_directory: "/build/cache",
+            sizes: {
+                "low": Size(width: 300, height: 300),
+                "medium": Size(width: 600, height: 600),
+                "high": Size(width: 1200, height: 1200),
+                "product": Size(width: 546, height: 302, pattern: "^products/", pre_optimize: true),
+            },
+            logger: Logger(
+                path: "/build/debug/impress.log",
+                level: WARN
+            ),
+        )
+        "#);
+
+        let config = Config::parse(config_content).expect("Failed to parse valid config");
+
+        assert_eq!(config.sizes["low"].quality[Extension::JPEG as usize], Extension::JPEG.default_quality());
+        assert_eq!(config.sizes["medium"].quality[Extension::WEBP as usize], Extension::WEBP.default_quality());
+        assert_eq!(config.sizes["high"].quality[Extension::AVIF as usize], Extension::AVIF.default_quality());
+    }
+    #[test]
+    fn test_build_url_regex_valid_pattern() {
+        let url = "/media/{size}/{path}[.{ext}]";
+        let regex = Config::build_url_regex(url).expect("Failed to build regex");
+
+        let url_to_test = "/media/medium/some/path/image.jpeg";
+        let captures = regex.captures(url_to_test).expect("Failed to match URL");
+
+        assert_eq!(captures.name("size").unwrap().as_str(), "medium");
+        assert_eq!(captures.name("path").unwrap().as_str(), "some/path/image");
+        assert_eq!(captures.name("ext").unwrap().as_str(), "jpeg");
+    }
+
+    #[test]
+    fn test_build_url_regex_optional_extension() {
+        let url = "/media/{size}/{path}[.{ext}]";
+        let regex = Config::build_url_regex(url).expect("Failed to build regex");
+
+        let url_to_test = "/media/high/another/path/image";
+        let captures = regex.captures(url_to_test).expect("Failed to match URL");
+
+        assert_eq!(captures.name("size").unwrap().as_str(), "high");
+        assert_eq!(captures.name("path").unwrap().as_str(), "another/path/image");
+        assert!(captures.name("ext").is_none());
+    }
+
+    #[test]
+    fn test_build_url_regex_invalid_pattern_unbalanced_brackets() {
+        let url = "/media/{size}/{path}[.{ext}[";
+        let result = Config::build_url_regex(url);
+
+        assert!(result.is_err());
+        if let Err(err) = result {
+            assert_eq!(err.to_string(), "Invalid URL pattern in config file");
+        }
+    }
+
+    #[test]
+    fn test_build_url_regex_valid_pattern_no_optional_extension() {
+        let url = "/media/{size}/{path}.{ext}";
+        let regex = Config::build_url_regex(url).expect("Failed to build regex");
+
+        let url_to_test = "/media/low/some/other/path/image.webp";
+        let captures = regex.captures(url_to_test).expect("Failed to match URL");
+
+        assert_eq!(captures.name("size").unwrap().as_str(), "low");
+        assert_eq!(captures.name("path").unwrap().as_str(), "some/other/path/image");
+        assert_eq!(captures.name("ext").unwrap().as_str(), "webp");
+    }
+
+    #[test]
+    fn test_build_url_regex_valid_pattern_optional_part() {
+        let url = "/media/[optional/]{size}/{path}.{ext}";
+        let regex = Config::build_url_regex(url).expect("Failed to build regex");
+
+        let url_to_test = "/media/optional/low/some/other/path/image.webp";
+        let captures = regex.captures(url_to_test).expect("Failed to match URL");
+
+        assert_eq!(captures.name("size").unwrap().as_str(), "low");
+        assert_eq!(captures.name("path").unwrap().as_str(), "some/other/path/image");
+        assert_eq!(captures.name("ext").unwrap().as_str(), "webp");
+
+        let url_to_test = "/media/low/some/other/path/image.webp";
+        let captures = regex.captures(url_to_test).expect("Failed to match URL");
+
+        assert_eq!(captures.name("size").unwrap().as_str(), "low");
+        assert_eq!(captures.name("path").unwrap().as_str(), "some/other/path/image");
+        assert_eq!(captures.name("ext").unwrap().as_str(), "webp");
+    }
+
+    #[test]
+    fn test_build_url_regex_invalid_pattern_missing_path() {
+        let url = "/media/{size}//[.{ext}]";
+        let result = Config::build_url_regex(url);
+
+        assert!(result.is_err());
     }
 }

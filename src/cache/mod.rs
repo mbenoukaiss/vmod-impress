@@ -39,6 +39,7 @@ impl Cache {
         let thread_tx = tx.clone();
         thread::spawn(move || {
             Self::load_images(&thread_config, thread_data.clone());
+
             file_saver::spawn(thread_config.clone(), thread_data.clone(), rx);
             watcher::spawn(thread_config.clone(), thread_data.clone(), thread_tx.clone());
             pre_optimizer::spawn(thread_config.clone(), thread_data.clone(), thread_tx.clone());
