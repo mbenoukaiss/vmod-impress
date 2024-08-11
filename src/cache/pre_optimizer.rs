@@ -6,7 +6,7 @@ use crate::cache::file_saver::OptimizeImage;
 use crate::config::{Config, Extension, Size};
 
 pub fn spawn(config: Config, data: CacheData, create_image_tx: Sender<OptimizeImage>) {
-    let data = (*data.read().unwrap()).clone();
+    let data = (*data.read().expect("Failed to start pre-optimizer thread")).clone();
 
     thread::spawn(move || {
         let sizes_to_optimize = config.sizes.iter()

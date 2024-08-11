@@ -26,8 +26,8 @@ pub fn resize(image: &DynamicImage, width: u32, height: u32) -> DynamicImage {
 
 pub fn optimize(image: &DynamicImage, config: OptimizationConfig) -> Result<Box<dyn OptimizedImage>, Error> {
     let optimized: Box<dyn OptimizedImage> = match config {
-        OptimizationConfig::Webp { quality, prefer_quality } => Box::new(webp::to_webp(&image, quality, prefer_quality)),
-        OptimizationConfig::Avif { quality, prefer_quality } => Box::new(avif::to_avif(&image, quality, prefer_quality)),
+        OptimizationConfig::Webp { quality, prefer_quality } => Box::new(webp::to_webp(&image, quality, prefer_quality)?),
+        OptimizationConfig::Avif { quality, prefer_quality } => Box::new(avif::to_avif(&image, quality, prefer_quality)?),
         OptimizationConfig::Jpeg { quality, prefer_quality } => Box::new(jpeg::to_jpeg(&image, quality, prefer_quality)?),
     };
 
@@ -35,7 +35,9 @@ pub fn optimize(image: &DynamicImage, config: OptimizationConfig) -> Result<Box<
 }
 
 pub fn write<T>(path: T, data: &[u8], last_modified: Option<SystemTime>) -> Result<(), Error> where T: AsRef<Path> {
-    fs::create_dir_all(path.as_ref().parent().unwrap()).unwrap();
+    let directory = path.as_ref().parent().expect("Logic error: file should be in a directory");
+
+    fs::create_dir_all(directory)?;
 
     let mut file = File::create_new(path)?;
     file.write(data)?;

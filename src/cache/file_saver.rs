@@ -38,7 +38,7 @@ fn save_image(config: Config, cache: CacheData, image: OptimizeImage) -> Result<
     let mut path = PathBuf::from(&config.cache_directory);
     path.push(&image.size);
     path.push(&image.image_id);
-    path.set_extension(image.extension.extensions().first().unwrap());
+    path.set_extension(image.extension.extensions().first().expect("Failed to get extension"));
 
     let Some(size) = config.sizes.get(&image.size) else {
         return Error::err(format!("Unknown image size {}", image.size))
@@ -58,9 +58,10 @@ fn save_image(config: Config, cache: CacheData, image: OptimizeImage) -> Result<
 
     images::write(&path, &optimized.data(), None)?;
 
-    let mut lock = cache.write().unwrap();
-    let cache = lock.get_mut(&image.image_id).unwrap();
-    cache.add(image.size, image.extension, &path);
+    cache.write()?
+        .get_mut(&image.image_id)
+        .ok_or_else(|| Error::new("Failed to get a lock"))?
+        .add(image.size, image.extension, &path);
 
     Ok(())
 }

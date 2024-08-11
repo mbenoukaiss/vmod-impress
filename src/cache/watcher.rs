@@ -49,7 +49,7 @@ fn handle_modification(event: Event, config: &Config, data: &CacheData, create_i
     let image_id = get_image_id(&image_path, &config);
 
     let to_delete = {
-        let mut lock = data.write().unwrap();
+        let mut lock = data.write()?;
 
         if !lock.contains_key(&image_id) {
             lock.insert(image_id.to_string(), CacheImage::new(image_path.to_owned()));
@@ -75,7 +75,7 @@ fn handle_modification(event: Event, config: &Config, data: &CacheData, create_i
             image_id: image_id.clone(),
             size: size_name.clone(),
             extension: format,
-        }).unwrap();
+        })?;
     }
 
     Ok(())
@@ -85,7 +85,7 @@ fn handle_deletion(event: Event, config: &Config, data: &CacheData) -> Result<()
     let image_path = get_image_path(&event)?;
     let image_id = get_image_id(&image_path, &config);
 
-    let image = data.write().unwrap().remove(&image_id);
+    let image = data.write()?.remove(&image_id);
 
     if let Some(image) = image {
         for (_, path) in image.optimized {

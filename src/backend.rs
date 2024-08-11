@@ -28,10 +28,10 @@ impl FileBackend {
 
 impl FileBackend {
     fn get_data(&self, ctx: &mut Ctx) -> Result<Option<FileTransfer>, Error> {
-        let bereq = ctx.http_bereq.as_ref().unwrap();
+        let bereq = ctx.http_bereq.as_ref().ok_or_else(|| Error::new("Failed to get request data"))?;
         let bereq_method = bereq.method().unwrap_or("");
-        let bereq_url = urlencoding::decode(bereq.url().unwrap())?;
-        let beresp = ctx.http_beresp.as_mut().unwrap();
+        let bereq_url = urlencoding::decode(bereq.url().ok_or_else(|| Error::new("Failed to get URL"))?)?;
+        let beresp = ctx.http_beresp.as_mut().ok_or_else(|| Error::new("Failed to get response"))?;
         let mut transfer = None;
 
         let pattern = self.config.url_regex.as_ref().expect("Badly initialized config");
@@ -96,7 +96,7 @@ impl Serve<FileTransfer> for FileBackend {
         match self.get_data(ctx) {
             Ok(transfer) => Ok(transfer),
             Err(e) => {
-                let beresp = ctx.http_beresp.as_mut().unwrap();
+                let beresp = ctx.http_beresp.as_mut().ok_or_else(|| Error::new("Failed to get response"))?;
                 beresp.set_status(500);
                 beresp.set_header("error", &e.to_string())?;
 

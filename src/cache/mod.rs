@@ -37,6 +37,10 @@ impl Cache {
         let thread_config = config.clone();
         let thread_data = data.clone();
         let thread_tx = tx.clone();
+
+        //done in a thread to avoid varnish hanging for seconds on startup, but could also
+        //lead to 404s if requests are made right after varnish was started
+        //could be improved by fetching from disk before returning a 404 ? or too complex for not much ?
         thread::spawn(move || {
             Self::load_images(&thread_config, thread_data.clone());
 
