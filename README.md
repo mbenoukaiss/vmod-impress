@@ -2,24 +2,13 @@
 Optimizes images by resizing, compressing and converting them to the
 best format supported by the client
 
-## Running the project
-First start the container which contains varnish and all the necessary
-tools to build the plugin :
-```shell
-docker compose up -d
-```
-
-Each time a change is made either to the rust code or to the varnish
-configuration file and you want to recompile the plugin, run this command :
-```shell
-docker exec vmod-impress /build.sh
-```
-
-Running this will also copy the compiled plugin and documentations into the
-`out` directory.
-
 ## Setting up the plugin
-Minimal varnish configuration to use the plugin :
+First download the [libvmod_impress.so](https://github.com/mbenoukaiss/vmod-impress/releases/latest/download/libvmod_impress.so) 
+file from the latest release and place it in the vmod folder.
+
+Below is the minimal varnish configuration to use the plugin. However you should
+also configure varnish to sanitize and cache based on the Accept HTTP header for 
+your images.
 ```vcl
 vcl 4.1;
 
@@ -92,6 +81,22 @@ all images will be served in this format to avoid generating a lot of useless fi
 Configures the logger, leave empty to deactivate the logger
 - `path` : Log file path
 - `level` : Minimum level of log, levels below will be filtered out
+
+## Running the project
+First start the container which contains varnish and all the necessary
+tools to build the plugin :
+```shell
+docker compose up -d
+```
+
+Each time a change is made either to the rust code or to the varnish
+configuration file and you want to recompile the plugin, run this command :
+```shell
+docker exec vmod-impress /build.sh
+```
+
+Running this will also copy the compiled plugin and documentations into the
+`out` directory.
 
 ## Todo
 - Add support for AVIF and JPEG
