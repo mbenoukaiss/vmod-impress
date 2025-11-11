@@ -8,7 +8,6 @@ services:
       args:
         USER_ID: ${USER_ID}
         GROUP_ID: ${GROUP_ID}
-    platform: linux/amd64
     user: ${USER_ID}:${GROUP_ID}
     ports: [21777:80]
     volumes:
