@@ -35,7 +35,10 @@ impl Impress {
     pub fn new(ctx: &mut Ctx, vcl_name: &str, path: Option<&str>) -> Result<Self, Error> {
         let config = Config::open(path)?;
         if let Some(logger) = &config.logger {
-            setup_logging(logger);
+            if let Err(e) = setup_logging(logger) {
+                //a misconfigured log file must not bring down the cache; surface it on stderr and continue
+                eprintln!("vmod-impress: failed to initialize logger ({}): continuing without file logging", e);
+            }
         }
 
         let cache = Cache::new(&config);
@@ -51,17 +54,16 @@ impl Impress {
     }
 }
 
-fn setup_logging(logger_config: &LoggerConfig) {
+fn setup_logging(logger_config: &LoggerConfig) -> Result<(), Error> {
     let file = FileAppender::builder()
         .encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} | {({l}):5.5} | {f}:{L} — {m}{n}")))
         .append(true)
-        .build(&logger_config.path)
-        .unwrap();
+        .build(&logger_config.path)?;
 
     let config = LogConfig::builder()
         .appender(Appender::builder().build("file_ap", Box::new(file)))
-        .build(Root::builder().appender("file_ap").build(logger_config.level.unwrap_or(LevelFilter::Info)))
-        .unwrap();
+        .build(Root::builder().appender("file_ap").build(logger_config.level.unwrap_or(LevelFilter::Info)))?;
 
-    log4rs::init_config(config).unwrap();
+    log4rs::init_config(config)?;
+    Ok(())
 }

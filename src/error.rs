@@ -84,6 +84,8 @@ error_from!(Error::Other, bx turbojpeg::Error);
 error_from!(Error::Other, bx image::ImageError);
 error_from!(Error::Other, bx std::io::Error);
 error_from!(Error::Other, bx varnish::vcl::Error);
+error_from!(Error::Other, bx log::SetLoggerError);
+error_from!(Error::Other, bx log4rs::config::runtime::ConfigErrors);
 
 pub trait MapResultString<T> {
     fn or_display<S>(self, msg: S) -> Result<T, Error>
