@@ -14,9 +14,19 @@ pub fn spawn(config: Config, data: CacheData, create_image_tx: Sender<OptimizeIm
     thread::spawn(move || {
         let (tx, rx) = sync::mpsc::channel();
 
-        let mut watcher = RecommendedWatcher::new(tx, NotifyConfig::default()).unwrap();
+        let mut watcher = match RecommendedWatcher::new(tx, NotifyConfig::default()) {
+            Ok(w) => w,
+            Err(e) => {
+                error!("failed to create file watcher: {}; cache will not auto-invalidate on source changes", e);
+                return;
+            }
+        };
+
         for root in &config.roots {
-            watcher.watch(Path::new(root), RecursiveMode::Recursive).unwrap();
+            if let Err(e) = watcher.watch(Path::new(root), RecursiveMode::Recursive) {
+                //one bad root must not prevent watching the others
+                error!("failed to watch root {:?}: {}", root, e);
+            }
         }
 
         event_handler(config, data, rx, create_image_tx);
