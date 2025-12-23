@@ -72,7 +72,15 @@ impl Cache {
 
         for (root, file) in files {
             let filename = file.path().to_string_lossy().to_string();
-            let filename_without_root = file.path().strip_prefix(root).unwrap().to_str().unwrap();
+            let filename_without_root = match file.path().strip_prefix(&root).ok().and_then(|p| p.to_str()) {
+                Some(s) => s,
+                None => {
+                    //either WalkDir returned a path that does not start with its root (shouldn't happen)
+                    //or the path contains non-UTF8 bytes; either way, skip it
+                    error!("skipping unparseable path under root {:?}: {:?}", root, file.path());
+                    continue;
+                }
+            };
 
             if let (Some(stem), Some(extension)) = utils::decompose_filename(filename_without_root) {
                 if !supported_extensions.contains(extension) {

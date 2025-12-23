@@ -6,7 +6,15 @@ use crate::cache::file_saver::OptimizeImage;
 use crate::config::{Config, Extension, Size};
 
 pub fn spawn(config: Config, data: CacheData, create_image_tx: Sender<OptimizeImage>) {
-    let data = (*data.read().expect("Failed to start pre-optimizer thread")).clone();
+    let data = match data.read() {
+        Ok(guard) => (*guard).clone(),
+        Err(e) => {
+            //a poisoned RwLock here means an earlier panic poisoned the cache;
+            //the runtime cache still works, only pre-warm is lost
+            error!("pre-optimizer skipped: cache lock poisoned ({})", e);
+            return;
+        }
+    };
 
     thread::spawn(move || {
         let sizes_to_optimize = config.sizes.iter()
@@ -22,11 +30,15 @@ pub fn spawn(config: Config, data: CacheData, create_image_tx: Sender<OptimizeIm
                 }
 
                 if !cache.optimized.contains_key(&(size_name.to_owned(), extension)) {
-                    create_image_tx.send(OptimizeImage {
+                    if let Err(e) = create_image_tx.send(OptimizeImage {
                         image_id: image_id.to_owned(),
                         size: size_name.to_owned(),
                         extension,
-                    }).unwrap();
+                    }) {
+                        //file_saver thread died; nothing left to do
+                        error!("pre-optimizer aborting: optimization channel closed ({})", e);
+                        return;
+                    }
                 }
             }
         }
