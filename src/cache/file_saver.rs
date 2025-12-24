@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 use rusty_pool::ThreadPool;
 use crate::cache::CacheData;
-use crate::config::{Config, Extension};
+use crate::config::{Extension, SharedConfig};
 use crate::error::Error;
 use crate::images;
 use crate::images::OptimizationConfig;
@@ -15,7 +15,7 @@ pub struct OptimizeImage {
     pub extension: Extension,
 }
 
-pub fn spawn(config: Config, data: CacheData, rx: Receiver<OptimizeImage>) {
+pub fn spawn(config: SharedConfig, data: CacheData, rx: Receiver<OptimizeImage>) {
     let threads = config.pre_optimizer_threads.unwrap_or(1);
     let pool = ThreadPool::new(0, threads, Duration::from_secs(60));
 
@@ -34,7 +34,7 @@ pub fn spawn(config: Config, data: CacheData, rx: Receiver<OptimizeImage>) {
     });
 }
 
-fn save_image(config: Config, cache: CacheData, image: OptimizeImage) -> Result<(), Error> {
+fn save_image(config: SharedConfig, cache: CacheData, image: OptimizeImage) -> Result<(), Error> {
     let mut path = PathBuf::from(&config.cache_directory);
     path.push(&image.size);
     path.push(&image.image_id);

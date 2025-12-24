@@ -9,16 +9,16 @@ use varnish::vcl::backend::{Serve, Transfer};
 use varnish::vcl::ctx::Ctx;
 use varnish::vcl::http::HTTP;
 use crate::cache::{Cache, FetchResult};
-use crate::config::Config;
+use crate::config::SharedConfig;
 use crate::error::Error;
 
 pub struct FileBackend {
-    config: Config,
+    config: SharedConfig,
     cache: Cache,
 }
 
 impl FileBackend {
-    pub fn new(config: Config, cache: Cache) -> Self {
+    pub fn new(config: SharedConfig, cache: Cache) -> Self {
         FileBackend {
             config,
             cache,

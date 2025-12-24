@@ -17,20 +17,20 @@ use mediatype::MediaType;
 use walkdir::WalkDir;
 use crate::backend::FileTransfer;
 use crate::cache::file_saver::OptimizeImage;
-use crate::config::{Config, Extension};
+use crate::config::{Config, Extension, SharedConfig};
 use crate::error::Error;
 use crate::utils;
 
 pub type CacheData = Arc<RwLock<HashMap<String, CacheImage>>>;
 
 pub struct Cache {
-    config: Config,
+    config: SharedConfig,
     data: CacheData,
     create_image_tx: Sender<OptimizeImage>,
 }
 
 impl Cache {
-    pub fn new(config: &Config) -> Self {
+    pub fn new(config: SharedConfig) -> Self {
         let (tx, rx) = mpsc::channel();
         let data = CacheData::default();
 
@@ -50,7 +50,7 @@ impl Cache {
         });
 
         Cache {
-            config: config.clone(),
+            config,
             data,
             create_image_tx: tx,
         }

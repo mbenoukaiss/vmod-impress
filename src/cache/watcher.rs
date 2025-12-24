@@ -7,10 +7,10 @@ use notify::{Config as NotifyConfig, Error as NotifyError, Event, EventKind, Rec
 use notify::event::{AccessKind, AccessMode, ModifyKind, RemoveKind, RenameMode};
 use crate::cache::{CacheData, CacheImage};
 use crate::cache::file_saver::OptimizeImage;
-use crate::config::Config;
+use crate::config::{Config, SharedConfig};
 use crate::error::Error;
 
-pub fn spawn(config: Config, data: CacheData, create_image_tx: Sender<OptimizeImage>) {
+pub fn spawn(config: SharedConfig, data: CacheData, create_image_tx: Sender<OptimizeImage>) {
     thread::spawn(move || {
         let (tx, rx) = sync::mpsc::channel();
 
@@ -33,7 +33,7 @@ pub fn spawn(config: Config, data: CacheData, create_image_tx: Sender<OptimizeIm
     });
 }
 
-fn event_handler(config: Config, data: CacheData, rx: Receiver<Result<Event, NotifyError>>, create_image_tx: Sender<OptimizeImage>) {
+fn event_handler(config: SharedConfig, data: CacheData, rx: Receiver<Result<Event, NotifyError>>, create_image_tx: Sender<OptimizeImage>) {
     while let Ok(result) = rx.recv() {
         match result {
             Ok(event) => {

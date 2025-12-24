@@ -13,6 +13,7 @@ mod images;
 mod error;
 mod utils;
 
+use std::sync::Arc;
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender,Config as LogConfig, Root};
 use log4rs::encode::pattern::PatternEncoder;
@@ -33,7 +34,7 @@ struct Impress {
 
 impl Impress {
     pub fn new(ctx: &mut Ctx, vcl_name: &str, path: Option<&str>) -> Result<Self, Error> {
-        let config = Config::open(path)?;
+        let config = Arc::new(Config::open(path)?);
         if let Some(logger) = &config.logger {
             if let Err(e) = setup_logging(logger) {
                 //a misconfigured log file must not bring down the cache; surface it on stderr and continue
@@ -41,7 +42,7 @@ impl Impress {
             }
         }
 
-        let cache = Cache::new(&config);
+        let cache = Cache::new(config.clone());
         let backend = FileBackend::new(config, cache);
 
         let backend = Backend::new(ctx, vcl_name, backend, false)?;

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::sync::Arc;
 use image::ImageFormat;
 use log::LevelFilter;
 use mediatype::MediaType;
@@ -11,6 +12,8 @@ use serde::Deserialize;
 use crate::error::Error;
 use crate::images::OptimizationConfig;
 
+pub type SharedConfig = Arc<Config>;
+
 #[derive(Deserialize, Clone, Debug)]
 pub struct Config {
     pub extensions: Vec<Extension>,
@@ -21,12 +24,29 @@ pub struct Config {
     pub pre_optimizer_threads: Option<usize>,
     pub sizes: HashMap<String, Size>,
     pub logger: Option<Logger>,
+    pub cleanup: Option<Cleanup>,
 
     #[serde(skip_deserializing)]
     pub url_regex: Option<Regex>,
 
     #[serde(rename = "qualities")]
     pub quality_serialized: Option<HashMap<Extension, f32>>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct Cleanup {
+    pub interval_seconds: Option<u64>,
+    pub orphan_sweep_on_startup: Option<bool>,
+}
+
+impl Cleanup {
+    pub fn interval_seconds(&self) -> u64 {
+        self.interval_seconds.unwrap_or(86_400)
+    }
+
+    pub fn orphan_sweep_on_startup(&self) -> bool {
+        self.orphan_sweep_on_startup.unwrap_or(true)
+    }
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -194,6 +214,7 @@ impl Default for Config {
                 }),
             ]),
             logger: None,
+            cleanup: None,
             url_regex: None,
             quality_serialized: None,
         }
@@ -405,5 +426,62 @@ mod tests {
         let result = Config::build_url_regex(url);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_cleanup_with_explicit_values() {
+        let config_content = String::from(r#"
+        (
+            extensions: [AVIF],
+            default_format: JPEG,
+            roots: ["/build/media"],
+            url: "/media/{size}/{path}.{ext}",
+            cache_directory: "/build/cache",
+            sizes: { "default": Size(width: 100, height: 100) },
+            cleanup: Cleanup(
+                interval_seconds: 3600,
+                orphan_sweep_on_startup: false,
+            ),
+        )
+        "#);
+        let config = Config::parse(config_content).expect("config should parse");
+        let cleanup = config.cleanup.expect("cleanup should be present");
+        assert_eq!(cleanup.interval_seconds(), 3600);
+        assert_eq!(cleanup.orphan_sweep_on_startup(), false);
+    }
+
+    #[test]
+    fn test_parse_cleanup_uses_defaults_when_fields_omitted() {
+        let config_content = String::from(r#"
+        (
+            extensions: [AVIF],
+            default_format: JPEG,
+            roots: ["/build/media"],
+            url: "/media/{size}/{path}.{ext}",
+            cache_directory: "/build/cache",
+            sizes: { "default": Size(width: 100, height: 100) },
+            cleanup: Cleanup(),
+        )
+        "#);
+        let config = Config::parse(config_content).expect("config should parse");
+        let cleanup = config.cleanup.expect("cleanup should be present");
+        assert_eq!(cleanup.interval_seconds(), 86_400);
+        assert_eq!(cleanup.orphan_sweep_on_startup(), true);
+    }
+
+    #[test]
+    fn test_parse_without_cleanup_section_keeps_back_compat() {
+        let config_content = String::from(r#"
+        (
+            extensions: [AVIF],
+            default_format: JPEG,
+            roots: ["/build/media"],
+            url: "/media/{size}/{path}.{ext}",
+            cache_directory: "/build/cache",
+            sizes: { "default": Size(width: 100, height: 100) },
+        )
+        "#);
+        let config = Config::parse(config_content).expect("config without cleanup should parse");
+        assert!(config.cleanup.is_none());
     }
 }

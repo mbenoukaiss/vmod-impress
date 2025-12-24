@@ -3,9 +3,9 @@ use std::thread;
 use itertools::Itertools;
 use crate::cache::CacheData;
 use crate::cache::file_saver::OptimizeImage;
-use crate::config::{Config, Extension, Size};
+use crate::config::{Extension, SharedConfig, Size};
 
-pub fn spawn(config: Config, data: CacheData, create_image_tx: Sender<OptimizeImage>) {
+pub fn spawn(config: SharedConfig, data: CacheData, create_image_tx: Sender<OptimizeImage>) {
     let data = match data.read() {
         Ok(guard) => (*guard).clone(),
         Err(e) => {
