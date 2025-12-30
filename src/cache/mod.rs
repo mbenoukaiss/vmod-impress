@@ -1,3 +1,4 @@
+mod cleaner;
 mod file_saver;
 mod pre_optimizer;
 mod watcher;
@@ -44,9 +45,27 @@ impl Cache {
         thread::spawn(move || {
             Self::load_images(&thread_config, thread_data.clone());
 
+            //one-shot orphan sweep at startup. Runs by default; opt out via
+            //cleanup: Cleanup(orphan_sweep_on_startup: false).
+            let want_startup_sweep = thread_config.cleanup.as_ref()
+                .map(|c| c.orphan_sweep_on_startup())
+                .unwrap_or(true);
+            if want_startup_sweep {
+                match cleaner::sweep_once(&thread_config, &thread_data) {
+                    Ok(0) => {}
+                    Ok(n) => info!("startup orphan sweep: removed {} stale cache file(s)", n),
+                    Err(e) => error!("startup orphan sweep failed: {}", e),
+                }
+            }
+
             file_saver::spawn(thread_config.clone(), thread_data.clone(), rx);
             watcher::spawn(thread_config.clone(), thread_data.clone(), thread_tx.clone());
             pre_optimizer::spawn(thread_config.clone(), thread_data.clone(), thread_tx.clone());
+
+            //periodic orphan sweep — only if cleanup is configured
+            if thread_config.cleanup.is_some() {
+                cleaner::spawn(thread_config.clone(), thread_data.clone());
+            }
         });
 
         Cache {
