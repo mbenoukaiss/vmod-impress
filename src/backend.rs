@@ -74,10 +74,14 @@ impl FileBackend {
             result.last_modified,
         );
 
-        let cache_control = if result.is_optimized {
-            "public, max-age=31536000, immutable"
+        //serve stale-while-revalidate: Varnish reads stale-while-revalidate=N
+        //from beresp.Cache-Control and uses it as beresp.grace, so it serves
+        //stale to clients while firing a cheap background revalidation through
+        //our 304-aware backend. The previous "immutable" suppressed that.
+        let cache_control: &str = if result.is_optimized {
+            &self.config.cache_control_optimized
         } else {
-            "no-cache"
+            &self.config.cache_control_fallback
         };
 
         match shape {

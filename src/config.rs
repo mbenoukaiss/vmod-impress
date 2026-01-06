@@ -25,9 +25,15 @@ pub struct Config {
     pub sizes: HashMap<String, Size>,
     pub logger: Option<Logger>,
     pub cleanup: Option<Cleanup>,
+    pub cache_control: Option<CacheControl>,
 
     #[serde(skip_deserializing)]
     pub url_regex: Option<Regex>,
+    //precomputed once at parse time so the hot path is allocation-free
+    #[serde(skip_deserializing)]
+    pub cache_control_optimized: String,
+    #[serde(skip_deserializing)]
+    pub cache_control_fallback: String,
 
     #[serde(rename = "qualities")]
     pub quality_serialized: Option<HashMap<Extension, f32>>,
@@ -46,6 +52,28 @@ impl Cleanup {
 
     pub fn orphan_sweep_on_startup(&self) -> bool {
         self.orphan_sweep_on_startup.unwrap_or(true)
+    }
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct CacheControl {
+    pub optimized_max_age_seconds: Option<u64>,
+    pub optimized_stale_while_revalidate_seconds: Option<u64>,
+    pub fallback_max_age_seconds: Option<u64>,
+    pub fallback_stale_while_revalidate_seconds: Option<u64>,
+}
+
+impl CacheControl {
+    pub fn optimized_header(&self) -> String {
+        let max_age = self.optimized_max_age_seconds.unwrap_or(86_400);
+        let swr = self.optimized_stale_while_revalidate_seconds.unwrap_or(604_800);
+        format!("public, max-age={}, stale-while-revalidate={}", max_age, swr)
+    }
+
+    pub fn fallback_header(&self) -> String {
+        let max_age = self.fallback_max_age_seconds.unwrap_or(60);
+        let swr = self.fallback_stale_while_revalidate_seconds.unwrap_or(3_600);
+        format!("public, max-age={}, stale-while-revalidate={}", max_age, swr)
     }
 }
 
@@ -167,6 +195,9 @@ impl Config {
 
         config.quality_serialized = None;
 
+        let cc = config.cache_control.clone().unwrap_or_default();
+        config.cache_control_optimized = cc.optimized_header();
+        config.cache_control_fallback = cc.fallback_header();
 
         Ok(config)
     }
@@ -215,7 +246,10 @@ impl Default for Config {
             ]),
             logger: None,
             cleanup: None,
+            cache_control: None,
             url_regex: None,
+            cache_control_optimized: String::new(),
+            cache_control_fallback: String::new(),
             quality_serialized: None,
         }
     }
@@ -467,6 +501,46 @@ mod tests {
         let cleanup = config.cleanup.expect("cleanup should be present");
         assert_eq!(cleanup.interval_seconds(), 86_400);
         assert_eq!(cleanup.orphan_sweep_on_startup(), true);
+    }
+
+    #[test]
+    fn test_parse_cache_control_defaults() {
+        let config_content = String::from(r#"
+        (
+            extensions: [AVIF],
+            default_format: JPEG,
+            roots: ["/build/media"],
+            url: "/media/{size}/{path}.{ext}",
+            cache_directory: "/build/cache",
+            sizes: { "default": Size(width: 100, height: 100) },
+        )
+        "#);
+        let config = Config::parse(config_content).expect("config should parse");
+        assert_eq!(config.cache_control_optimized, "public, max-age=86400, stale-while-revalidate=604800");
+        assert_eq!(config.cache_control_fallback, "public, max-age=60, stale-while-revalidate=3600");
+    }
+
+    #[test]
+    fn test_parse_cache_control_overrides() {
+        let config_content = String::from(r#"
+        (
+            extensions: [AVIF],
+            default_format: JPEG,
+            roots: ["/build/media"],
+            url: "/media/{size}/{path}.{ext}",
+            cache_directory: "/build/cache",
+            sizes: { "default": Size(width: 100, height: 100) },
+            cache_control: CacheControl(
+                optimized_max_age_seconds: 3600,
+                optimized_stale_while_revalidate_seconds: 86400,
+                fallback_max_age_seconds: 30,
+                fallback_stale_while_revalidate_seconds: 600,
+            ),
+        )
+        "#);
+        let config = Config::parse(config_content).expect("config should parse");
+        assert_eq!(config.cache_control_optimized, "public, max-age=3600, stale-while-revalidate=86400");
+        assert_eq!(config.cache_control_fallback, "public, max-age=30, stale-while-revalidate=600");
     }
 
     #[test]

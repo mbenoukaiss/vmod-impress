@@ -158,7 +158,10 @@ mod tests {
             sizes,
             logger: None,
             cleanup: None,
+            cache_control: None,
             url_regex: None,
+            cache_control_optimized: String::new(),
+            cache_control_fallback: String::new(),
             quality_serialized: None,
         }
     }

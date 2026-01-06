@@ -4,7 +4,7 @@ mod pre_optimizer;
 mod watcher;
 
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
+use std::fs::{self, File};
 use std::ops::Deref;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -106,9 +106,14 @@ impl Cache {
                     continue;
                 }
 
+                //source mtime is used to invalidate cache files that were written
+                //before the source's last modification (i.e. the source changed during
+                //downtime and the live notify watcher never saw it)
+                let source_mtime = fs::metadata(&filename).ok().and_then(|m| m.modified().ok());
+
                 let mut item = CacheImage::new(filename);
 
-                //load optimized images from cache
+                //load optimized images from cache, dropping anything older than the source
                 for size in config.sizes.keys() {
                     for extension in &config.extensions {
                         let mut path = PathBuf::from(&config.cache_directory);
@@ -116,9 +121,26 @@ impl Cache {
                         path.push(stem);
                         path.set_extension(extension.extensions().first().unwrap());
 
-                        if path.exists() {
-                            item.add(size.to_owned(), extension.to_owned(), path);
+                        if !path.exists() {
+                            continue;
                         }
+
+                        let cache_mtime = fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+                        let stale = match (source_mtime, cache_mtime) {
+                            (Some(s), Some(c)) => c < s,
+                            //metadata read failed; keep the cache entry rather than risk
+                            //deleting good data — eventual consistency via watcher / SWR
+                            _ => false,
+                        };
+
+                        if stale {
+                            if let Err(e) = fs::remove_file(&path) {
+                                error!("failed to remove stale cache file {:?}: {}", path, e);
+                            }
+                            continue;
+                        }
+
+                        item.add(size.to_owned(), extension.to_owned(), path);
                     }
                 }
 
