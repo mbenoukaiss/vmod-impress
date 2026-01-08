@@ -18,7 +18,6 @@ turbojpeg = { version = "1.1", features = ["image"] }
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }
 ron = "0.8"
-serde_json = "1.0"
 walkdir = "2.5"
 regex = "1.10"
 log = "0.4"
@@ -34,7 +33,3 @@ mediatype = "0.19.18"
 name = "vmod_impress"
 path = "src/lib.rs"
 crate-type = ["cdylib"]
-
-[[bin]]
-name = "vmod_impress_tests"
-path = "src/main.rs"
