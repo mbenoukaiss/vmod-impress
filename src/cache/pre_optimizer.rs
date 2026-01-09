@@ -6,6 +6,11 @@ use crate::cache::file_saver::OptimizeImage;
 use crate::config::{Extension, SharedConfig, Size};
 
 pub fn spawn(config: SharedConfig, data: CacheData, create_image_tx: Sender<OptimizeImage>) {
+    //skip the whole machinery if no size opts in — saves a thread + a clone of the cache map
+    if !config.sizes.values().any(|s| s.pre_optimize.unwrap_or(false)) {
+        return;
+    }
+
     let data = match data.read() {
         Ok(guard) => (*guard).clone(),
         Err(e) => {
