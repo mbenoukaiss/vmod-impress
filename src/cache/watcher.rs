@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::{fs, mem, sync, thread};
 use std::collections::HashMap;
+use image::ImageFormat;
 use itertools::Itertools;
 use notify::{Config as NotifyConfig, Error as NotifyError, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use notify::event::{AccessKind, AccessMode, ModifyKind, RemoveKind, RenameMode};
@@ -62,7 +63,10 @@ fn handle_modification(event: Event, config: &Config, data: &CacheData, create_i
         let mut lock = data.write()?;
 
         if !lock.contains_key(&image_id) {
-            lock.insert(image_id.to_string(), CacheImage::new(image_path.to_owned()));
+            let mime = ImageFormat::from_path(&image_path)
+                .map(|f| f.to_mime_type())
+                .unwrap_or("application/octet-stream");
+            lock.insert(image_id.to_string(), CacheImage::new(image_path.to_owned(), mime));
         }
 
         if let Some(cache) = lock.get_mut(&image_id) {

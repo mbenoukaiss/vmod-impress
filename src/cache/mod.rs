@@ -111,7 +111,12 @@ impl Cache {
                 //downtime and the live notify watcher never saw it)
                 let source_mtime = fs::metadata(&filename).ok().and_then(|m| m.modified().ok());
 
-                let mut item = CacheImage::new(filename);
+                //MIME of the source, derived once at load time
+                let source_mime = ImageFormat::from_path(&filename)
+                    .map(|f| f.to_mime_type())
+                    .unwrap_or("application/octet-stream");
+
+                let mut item = CacheImage::new(filename, source_mime);
 
                 //load optimized images from cache, dropping anything older than the source
                 for size in config.sizes.keys() {
@@ -178,7 +183,7 @@ impl Cache {
             let path = Path::new(file);
 
             if path.exists() {
-                return self.read_image(file, true);
+                return read_image(file, true, appropriate_extension.mime_str());
             } else {
                 //the image was in cache but the file did not exist,
                 //maybe it got deleted
@@ -191,34 +196,38 @@ impl Cache {
         }
 
         //return the image as is, it will be optimized later
-        self.read_image(&cache.base_image_path, false)
+        read_image(&cache.base_image_path, false, cache.base_mime)
     }
+}
 
-    fn read_image(&self, path: &str, is_optimized: bool) -> Result<Option<FetchResult>, Error> {
-        let file = File::open(path)?;
-        let metadata = file.metadata()?;
-        let format = ImageFormat::from_path(path)?;
+fn read_image(path: &str, is_optimized: bool, mime: &'static str) -> Result<Option<FetchResult>, Error> {
+    let file = File::open(path)?;
+    let metadata = file.metadata()?;
 
-        Ok(Some(FetchResult {
-            data: FileTransfer::new(file, metadata.len()),
-            last_modified: DateTime::from(metadata.modified() ? ),
-            inode: metadata.ino(),
-            mime: format.to_mime_type(),
-            is_optimized,
-        }))
-    }
+    Ok(Some(FetchResult {
+        data: FileTransfer::new(file, metadata.len()),
+        last_modified: DateTime::from(metadata.modified()?),
+        inode: metadata.ino(),
+        mime,
+        is_optimized,
+    }))
 }
 
 #[derive(Clone, Debug)]
 pub struct CacheImage {
     pub base_image_path: String,
+    //MIME of the source image, used when serving the un-optimized fallback.
+    //Stored once at insert so the request hot path doesn't re-stat the path
+    //or re-call ImageFormat::from_path on every request.
+    pub base_mime: &'static str,
     pub optimized: HashMap<(String, Extension), String>, //associating size and extension to the path
 }
 
 impl CacheImage {
-    pub fn new(base_image_path: String) -> Self {
+    pub fn new(base_image_path: String, base_mime: &'static str) -> Self {
         CacheImage {
             base_image_path,
+            base_mime,
             optimized: HashMap::new(),
         }
     }

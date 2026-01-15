@@ -173,7 +173,7 @@ mod tests {
     }
 
     fn known_image(path: &str) -> CacheImage {
-        CacheImage::new(path.to_string())
+        CacheImage::new(path.to_string(), "image/jpeg")
     }
 
     #[test]

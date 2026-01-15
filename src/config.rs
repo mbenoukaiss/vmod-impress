@@ -152,6 +152,14 @@ impl Extension {
     pub fn extensions(&self) -> &'static [&'static str] {
         self.image_format().extensions_str()
     }
+
+    pub fn mime_str(&self) -> &'static str {
+        match self {
+            Extension::JPEG => "image/jpeg",
+            Extension::WEBP => "image/webp",
+            Extension::AVIF => "image/avif",
+        }
+    }
 }
 
 impl Config {
