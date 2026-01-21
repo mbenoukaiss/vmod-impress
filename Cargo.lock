@@ -1702,7 +1702,6 @@ dependencies = [
  "chrono",
  "headers-accept",
  "image",
- "itertools",
  "libavif",
  "log",
  "log4rs",

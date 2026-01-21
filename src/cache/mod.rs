@@ -8,7 +8,7 @@ use std::fs::{self, File};
 use std::ops::Deref;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc, RwLock};
+use std::sync::{Arc, mpsc, Mutex, RwLock};
 use std::sync::mpsc::Sender;
 use std::thread;
 use chrono::{DateTime, Utc};
@@ -17,7 +17,7 @@ use image::ImageFormat;
 use mediatype::MediaType;
 use walkdir::WalkDir;
 use crate::backend::FileTransfer;
-use crate::cache::file_saver::OptimizeImage;
+use crate::cache::file_saver::{InFlight, OptimizeJob};
 use crate::config::{Config, Extension, SharedConfig};
 use crate::error::Error;
 use crate::utils;
@@ -27,17 +27,20 @@ pub type CacheData = Arc<RwLock<HashMap<String, CacheImage>>>;
 pub struct Cache {
     config: SharedConfig,
     data: CacheData,
-    create_image_tx: Sender<OptimizeImage>,
+    create_image_tx: Sender<OptimizeJob>,
+    in_flight: InFlight,
 }
 
 impl Cache {
     pub fn new(config: SharedConfig) -> Self {
         let (tx, rx) = mpsc::channel();
         let data = CacheData::default();
+        let in_flight: InFlight = Arc::new(Mutex::new(HashSet::new()));
 
         let thread_config = config.clone();
         let thread_data = data.clone();
         let thread_tx = tx.clone();
+        let thread_in_flight = in_flight.clone();
 
         //done in a thread to avoid varnish hanging for seconds on startup, but could also
         //lead to 404s if requests are made right after varnish was started
@@ -58,9 +61,9 @@ impl Cache {
                 }
             }
 
-            file_saver::spawn(thread_config.clone(), thread_data.clone(), rx);
-            watcher::spawn(thread_config.clone(), thread_data.clone(), thread_tx.clone());
-            pre_optimizer::spawn(thread_config.clone(), thread_data.clone(), thread_tx.clone());
+            file_saver::spawn(thread_config.clone(), thread_data.clone(), thread_in_flight.clone(), rx);
+            watcher::spawn(thread_config.clone(), thread_data.clone(), thread_tx.clone(), thread_in_flight.clone());
+            pre_optimizer::spawn(thread_config.clone(), thread_data.clone(), thread_tx.clone(), thread_in_flight.clone());
 
             //periodic orphan sweep — only if cleanup is configured
             if thread_config.cleanup.is_some() {
@@ -72,6 +75,7 @@ impl Cache {
             config,
             data,
             create_image_tx: tx,
+            in_flight,
         }
     }
 
@@ -160,13 +164,14 @@ impl Cache {
             return Ok(None);
         };
 
-        //convert unavailable extensions
-        for extension in self.config.extensions.iter().filter(|ext| !cache.has(size, **ext)) {
-            let _ = self.create_image_tx.send(OptimizeImage {
-                image_id: image_id.to_owned(),
-                size: size.to_owned(),
-                extension: *extension,
-            });
+        //batch all missing extensions into one OptimizeJob — saver reads + resizes
+        //the source ONCE for the whole job, then encodes each extension
+        let missing: Vec<Extension> = self.config.extensions.iter()
+            .filter(|ext| !cache.has(size, **ext))
+            .copied()
+            .collect();
+        if !missing.is_empty() {
+            self.enqueue_optimize(image_id, size, missing);
         }
 
         let converted_extensions = self.config.extensions.iter()
@@ -185,18 +190,40 @@ impl Cache {
             if path.exists() {
                 return read_image(file, true, appropriate_extension.mime_str());
             } else {
-                //the image was in cache but the file did not exist,
-                //maybe it got deleted
-                let _ = self.create_image_tx.send(OptimizeImage {
-                    image_id: image_id.to_owned(),
-                    size: size.to_owned(),
-                    extension: appropriate_extension,
-                });
+                //the image was in cache but the file did not exist, maybe it got deleted
+                self.enqueue_optimize(image_id, size, vec![appropriate_extension]);
             }
         }
 
         //return the image as is, it will be optimized later
         read_image(&cache.base_image_path, false, cache.base_mime)
+    }
+
+    fn enqueue_optimize(&self, image_id: &str, size: &str, extensions: Vec<Extension>) {
+        let key = (image_id.to_owned(), size.to_owned());
+        //dedup: don't enqueue a second job for the same (image_id, size) if one
+        //is already in flight; the in-flight job covers the work
+        match self.in_flight.lock() {
+            Ok(mut guard) => {
+                if !guard.insert(key.clone()) {
+                    return;
+                }
+            }
+            Err(_) => return,
+        }
+
+        if let Err(e) = self.create_image_tx.send(OptimizeJob {
+            image_id: key.0,
+            size: key.1.clone(),
+            extensions,
+        }) {
+            //channel closed (saver thread died); release the in_flight slot
+            //so the slot doesn't leak forever
+            error!("optimize channel closed: {}", e);
+            if let Ok(mut guard) = self.in_flight.lock() {
+                guard.remove(&(image_id.to_owned(), size.to_owned()));
+            }
+        }
     }
 }
 

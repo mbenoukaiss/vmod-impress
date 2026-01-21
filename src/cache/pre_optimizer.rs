@@ -1,11 +1,10 @@
 use std::sync::mpsc::Sender;
 use std::thread;
-use itertools::Itertools;
 use crate::cache::CacheData;
-use crate::cache::file_saver::OptimizeImage;
-use crate::config::{Extension, SharedConfig, Size};
+use crate::cache::file_saver::{InFlight, OptimizeJob};
+use crate::config::SharedConfig;
 
-pub fn spawn(config: SharedConfig, data: CacheData, create_image_tx: Sender<OptimizeImage>) {
+pub fn spawn(config: SharedConfig, data: CacheData, create_image_tx: Sender<OptimizeJob>, in_flight: InFlight) {
     //skip the whole machinery if no size opts in — saves a thread + a clone of the cache map
     if !config.sizes.values().any(|s| s.pre_optimize.unwrap_or(false)) {
         return;
@@ -22,28 +21,49 @@ pub fn spawn(config: SharedConfig, data: CacheData, create_image_tx: Sender<Opti
     };
 
     thread::spawn(move || {
-        let sizes_to_optimize = config.sizes.iter()
+        let pre_optimize_sizes: Vec<(&String, &crate::config::Size)> = config.sizes.iter()
             .filter(|(_, size)| size.pre_optimize.unwrap_or(false))
-            .cartesian_product(config.extensions.iter())
-            .map(|((size_name, size), extension)| (size_name, size, extension))
-            .collect::<Vec<(&String, &Size, &Extension)>>();
+            .collect();
 
-        for (size_name, size, &extension) in sizes_to_optimize {
-            for (image_id, cache) in &data {
+        for (image_id, cache) in &data {
+            for (size_name, size) in &pre_optimize_sizes {
                 if !size.matches(image_id) {
                     continue;
                 }
 
-                if !cache.optimized.contains_key(&(size_name.to_owned(), extension)) {
-                    if let Err(e) = create_image_tx.send(OptimizeImage {
-                        image_id: image_id.to_owned(),
-                        size: size_name.to_owned(),
-                        extension,
-                    }) {
-                        //file_saver thread died; nothing left to do
-                        error!("pre-optimizer aborting: optimization channel closed ({})", e);
-                        return;
+                //one job per (image_id, size) covering all configured extensions
+                //that don't already exist on disk
+                let missing: Vec<_> = config.extensions.iter()
+                    .filter(|ext| !cache.optimized.contains_key(&((*size_name).clone(), **ext)))
+                    .copied()
+                    .collect();
+
+                if missing.is_empty() {
+                    continue;
+                }
+
+                let key = (image_id.clone(), (*size_name).clone());
+                match in_flight.lock() {
+                    Ok(mut guard) => {
+                        if !guard.insert(key.clone()) {
+                            //another caller already enqueued this (image_id, size)
+                            continue;
+                        }
                     }
+                    Err(_) => continue,
+                }
+
+                if let Err(e) = create_image_tx.send(OptimizeJob {
+                    image_id: image_id.clone(),
+                    size: (*size_name).clone(),
+                    extensions: missing,
+                }) {
+                    //file_saver thread died; release the slot we just claimed and stop
+                    error!("pre-optimizer aborting: optimization channel closed ({})", e);
+                    if let Ok(mut guard) = in_flight.lock() {
+                        guard.remove(&key);
+                    }
+                    return;
                 }
             }
         }

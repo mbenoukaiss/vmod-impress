@@ -3,15 +3,14 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::{fs, mem, sync, thread};
 use std::collections::HashMap;
 use image::ImageFormat;
-use itertools::Itertools;
 use notify::{Config as NotifyConfig, Error as NotifyError, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use notify::event::{AccessKind, AccessMode, ModifyKind, RemoveKind, RenameMode};
 use crate::cache::{CacheData, CacheImage};
-use crate::cache::file_saver::OptimizeImage;
+use crate::cache::file_saver::{InFlight, OptimizeJob};
 use crate::config::{Config, SharedConfig};
 use crate::error::Error;
 
-pub fn spawn(config: SharedConfig, data: CacheData, create_image_tx: Sender<OptimizeImage>) {
+pub fn spawn(config: SharedConfig, data: CacheData, create_image_tx: Sender<OptimizeJob>, in_flight: InFlight) {
     thread::spawn(move || {
         let (tx, rx) = sync::mpsc::channel();
 
@@ -30,19 +29,19 @@ pub fn spawn(config: SharedConfig, data: CacheData, create_image_tx: Sender<Opti
             }
         }
 
-        event_handler(config, data, rx, create_image_tx);
+        event_handler(config, data, rx, create_image_tx, in_flight);
     });
 }
 
-fn event_handler(config: SharedConfig, data: CacheData, rx: Receiver<Result<Event, NotifyError>>, create_image_tx: Sender<OptimizeImage>) {
+fn event_handler(config: SharedConfig, data: CacheData, rx: Receiver<Result<Event, NotifyError>>, create_image_tx: Sender<OptimizeJob>, in_flight: InFlight) {
     while let Ok(result) = rx.recv() {
         match result {
             Ok(event) => {
                 let result = match event.kind {
-                    EventKind::Access(AccessKind::Close(AccessMode::Write)) => handle_modification(event, &config, &data, create_image_tx.clone()),
+                    EventKind::Access(AccessKind::Close(AccessMode::Write)) => handle_modification(event, &config, &data, &create_image_tx, &in_flight),
                     EventKind::Remove(RemoveKind::File) => handle_deletion(event, &config, &data),
                     EventKind::Modify(ModifyKind::Name(RenameMode::From)) => handle_deletion(event, &config, &data),
-                    EventKind::Modify(ModifyKind::Name(RenameMode::To)) => handle_modification(event, &config, &data, create_image_tx.clone()),
+                    EventKind::Modify(ModifyKind::Name(RenameMode::To)) => handle_modification(event, &config, &data, &create_image_tx, &in_flight),
                     _ => Ok(()),
                 };
 
@@ -55,7 +54,7 @@ fn event_handler(config: SharedConfig, data: CacheData, rx: Receiver<Result<Even
     }
 }
 
-fn handle_modification(event: Event, config: &Config, data: &CacheData, create_image_tx: Sender<OptimizeImage>) -> Result<(), Error> {
+fn handle_modification(event: Event, config: &Config, data: &CacheData, create_image_tx: &Sender<OptimizeJob>, in_flight: &InFlight) -> Result<(), Error> {
     let image_path = get_image_path(&event)?;
     let image_id = get_image_id(&image_path, &config);
 
@@ -80,16 +79,32 @@ fn handle_modification(event: Event, config: &Config, data: &CacheData, create_i
         fs::remove_file(path)?;
     }
 
-    let to_optimize = config.sizes.iter()
+    //one OptimizeJob per (image_id, size) covering all configured extensions —
+    //saver reads + resizes the source once for the whole job
+    for (size_name, _size) in config.sizes.iter()
         .filter(|(_, size)| size.matches(&image_id) && size.pre_optimize.unwrap_or(false))
-        .cartesian_product(config.extensions.iter());
+    {
+        let key = (image_id.clone(), size_name.clone());
+        match in_flight.lock() {
+            Ok(mut guard) => {
+                if !guard.insert(key.clone()) {
+                    continue;
+                }
+            }
+            Err(_) => continue,
+        }
 
-    for ((size_name, _), &format) in to_optimize {
-        create_image_tx.send(OptimizeImage {
+        if let Err(e) = create_image_tx.send(OptimizeJob {
             image_id: image_id.clone(),
             size: size_name.clone(),
-            extension: format,
-        })?;
+            extensions: config.extensions.clone(),
+        }) {
+            error!("watcher: optimize channel closed: {}", e);
+            if let Ok(mut guard) = in_flight.lock() {
+                guard.remove(&key);
+            }
+            return Ok(());
+        }
     }
 
     Ok(())
