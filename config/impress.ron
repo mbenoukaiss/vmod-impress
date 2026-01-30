@@ -10,17 +10,11 @@ Config(
         "high": Size(width: 1200, height: 1200),
         "product": Size(width: 546, height: 302, pattern: "^products/", pre_optimize: true),
     },
-    //tune the response Cache-Control window — defaults shown
     cache_control: CacheControl(
         optimized_max_age_seconds: 86400,
         optimized_stale_while_revalidate_seconds: 604800,
         fallback_max_age_seconds: 60,
         fallback_stale_while_revalidate_seconds: 3600,
-    ),
-    //enable the periodic orphan sweeper (24h by default)
-    cleanup: Cleanup(
-        interval_seconds: 86400,
-        orphan_sweep_on_startup: true,
     ),
     logger: Logger(
         path: "/build/debug/impress.log",

@@ -7,17 +7,12 @@ use crate::cache::CacheData;
 use crate::config::{Config, Extension, SharedConfig};
 use crate::utils;
 
-/// Spawn the periodic orphan-sweep thread. Only spawned when `config.cleanup`
-/// is configured. With `cleanup: None`, callers should still run the startup
-/// sweep but skip this thread.
-pub fn spawn(config: SharedConfig, data: CacheData) {
-    let interval = config.cleanup.as_ref()
-        .map(|c| c.interval_seconds())
-        .unwrap_or(86_400);
+const SWEEP_INTERVAL: Duration = Duration::from_secs(86_400);
 
+pub fn spawn(config: SharedConfig, data: CacheData) {
     thread::spawn(move || {
         loop {
-            thread::sleep(Duration::from_secs(interval));
+            thread::sleep(SWEEP_INTERVAL);
             match sweep_once(&config, &data) {
                 Ok(0) => {}
                 Ok(n) => info!("cleaner: removed {} orphan cache file(s)", n),
@@ -157,7 +152,6 @@ mod tests {
             pre_optimizer_threads: None,
             sizes,
             logger: None,
-            cleanup: None,
             cache_control: None,
             url_regex: None,
             cache_control_optimized: String::new(),

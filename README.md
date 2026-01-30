@@ -52,9 +52,6 @@ Config(
         optimized_max_age_seconds: 86400,
         optimized_stale_while_revalidate_seconds: 604800,
     ),
-    cleanup: Cleanup(
-        interval_seconds: 86400,
-    ),
     logger: Logger(
         path: "/var/log/impress.log",
         level: WARN,
@@ -76,7 +73,6 @@ Config(
 | `cache_directory` | Directory where optimized variants are written. Layout is `<cache_directory>/<size>/<image_id>.<ext>`. |
 | `pre_optimizer_threads` | Threads in the optimization pool. Default `1`. |
 | `sizes` | Map of named sizes, see below. |
-| `cleanup` | Optional. Disk-cleanup policy, see below. Defaults are sensible; omitting the section keeps the previous behavior of "no periodic sweep" but still does a startup sweep. |
 | `cache_control` | Optional. Tune the `Cache-Control` header sent on responses, see below. |
 | `logger` | Optional file logger. Omit to disable file logging. |
 
@@ -107,21 +103,20 @@ url: "/media/{size}/{path}[.{ext}]"
 | `pattern` | Optional regex that must match `{path}` for this size to apply. If absent, all paths match. |
 | `pre_optimize` | Optional. If `true`, every matching image is optimized into all configured `extensions` at startup and on watcher modification, instead of lazily on first request. Recommended only with a `pattern` so you don't pre-optimize the whole tree. |
 
-### `Cleanup` (optional)
+### Disk cleanup
 
-| Field | Default | Description |
-|---|---|---|
-| `interval_seconds` | `86400` | How often the periodic orphan-sweep thread runs. |
-| `orphan_sweep_on_startup` | `true` | Whether to walk `cache_directory` once at startup and remove any cache file whose source no longer exists or whose size/extension is no longer configured. |
+Orphan cleanup runs unconditionally — there is no `cleanup` config block:
+
+- A startup sweep walks `cache_directory` once after `load_images` and
+  removes any cache file whose source no longer exists or whose
+  size/extension is no longer in the current configuration.
+- A periodic sweep thread runs the same logic every 24 hours so
+  long-running varnishd instances reclaim disk space without a restart.
 
 The cleaner removes only **orphans** — cache files for which the source has
 been deleted, or that don't fit the current `sizes` / `extensions`
 configuration. There is no LRU or size-cap eviction; the source filesystem
 is the source of truth for what should exist in the cache.
-
-If the `cleanup` block is omitted entirely, only the startup sweep runs (no
-periodic thread). If you set `cleanup: Cleanup()` (empty), both sweeps run
-with the defaults above.
 
 ### `CacheControl` (optional)
 
