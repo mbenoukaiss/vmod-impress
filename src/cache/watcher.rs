@@ -56,7 +56,7 @@ fn event_handler(config: SharedConfig, data: CacheData, rx: Receiver<Result<Even
 
 fn handle_modification(event: Event, config: &Config, data: &CacheData, create_image_tx: &Sender<OptimizeJob>, in_flight: &InFlight) -> Result<(), Error> {
     let image_path = get_image_path(&event)?;
-    let image_id = get_image_id(&image_path, &config);
+    let image_id = get_image_id(&image_path, config);
 
     let to_delete = {
         let mut lock = data.write()?;
@@ -112,7 +112,7 @@ fn handle_modification(event: Event, config: &Config, data: &CacheData, create_i
 
 fn handle_deletion(event: Event, config: &Config, data: &CacheData) -> Result<(), Error> {
     let image_path = get_image_path(&event)?;
-    let image_id = get_image_id(&image_path, &config);
+    let image_id = get_image_id(&image_path, config);
 
     let image = data.write()?.remove(&image_id);
 

@@ -14,11 +14,9 @@ impl OptimizedImage for Webp {
     }
 }
 
-impl Into<Webp> for WebPMemory {
-    fn into(self) -> Webp {
-        Webp {
-            data: self,
-        }
+impl From<WebPMemory> for Webp {
+    fn from(data: WebPMemory) -> Self {
+        Webp { data }
     }
 }
 

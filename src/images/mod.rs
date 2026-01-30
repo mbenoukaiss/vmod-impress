@@ -26,9 +26,9 @@ pub fn resize(image: &DynamicImage, width: u32, height: u32) -> DynamicImage {
 
 pub fn optimize(image: &DynamicImage, config: OptimizationConfig) -> Result<Box<dyn OptimizedImage>, Error> {
     let optimized: Box<dyn OptimizedImage> = match config {
-        OptimizationConfig::Webp { quality, prefer_quality } => Box::new(webp::to_webp(&image, quality, prefer_quality)?),
-        OptimizationConfig::Avif { quality, prefer_quality } => Box::new(avif::to_avif(&image, quality, prefer_quality)?),
-        OptimizationConfig::Jpeg { quality, prefer_quality } => Box::new(jpeg::to_jpeg(&image, quality, prefer_quality)?),
+        OptimizationConfig::Webp { quality, prefer_quality } => Box::new(webp::to_webp(image, quality, prefer_quality)?),
+        OptimizationConfig::Avif { quality, prefer_quality } => Box::new(avif::to_avif(image, quality, prefer_quality)?),
+        OptimizationConfig::Jpeg { quality, prefer_quality } => Box::new(jpeg::to_jpeg(image, quality, prefer_quality)?),
     };
 
     Ok(optimized)
@@ -40,7 +40,7 @@ pub fn write<T>(path: T, data: &[u8], last_modified: Option<SystemTime>) -> Resu
     fs::create_dir_all(directory)?;
 
     let mut file = File::create_new(path)?;
-    file.write(data)?;
+    file.write_all(data)?;
 
     if let Some(last_modified) = last_modified {
         file.set_modified(last_modified)?;

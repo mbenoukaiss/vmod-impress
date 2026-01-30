@@ -82,6 +82,9 @@ pub struct Logger {
     pub level: Option<LevelFilter>,
 }
 
+//Variant names are matched against ron config files; renaming to CamelCase
+//would silently break every user's impress.ron, so the upper-case names stay.
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Deserialize, Eq, PartialEq, Hash, Copy, Clone, Debug)]
 #[repr(u8)]
 pub enum Extension {
@@ -92,13 +95,14 @@ pub enum Extension {
 
 impl Extension {
     pub fn values() -> [Extension; 3] {
-        return [
+        [
             Extension::JPEG,
             Extension::WEBP,
             Extension::AVIF,
-        ];
+        ]
     }
 
+    #[allow(clippy::wrong_self_convention)] //changing &self → self propagates lifetimes through callers in undesirable ways
     pub fn to_media_type(&self) -> MediaType {
         match self {
             Extension::AVIF => MediaType::new(IMAGE, AVIF),

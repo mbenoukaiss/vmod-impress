@@ -116,7 +116,7 @@ impl Cache {
                 for size in config.sizes.keys() {
                     for extension in &config.extensions {
                         let mut path = PathBuf::from(&config.cache_directory);
-                        path.push(&size);
+                        path.push(size);
                         path.push(stem);
                         path.set_extension(extension.extensions().first().unwrap());
 

@@ -13,11 +13,9 @@ impl OptimizedImage for Jpeg {
     }
 }
 
-impl Into<Jpeg> for OwnedBuf {
-    fn into(self) -> Jpeg {
-        Jpeg {
-            data: self,
-        }
+impl From<OwnedBuf> for Jpeg {
+    fn from(data: OwnedBuf) -> Self {
+        Jpeg { data }
     }
 }
 

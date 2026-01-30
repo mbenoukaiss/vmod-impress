@@ -13,11 +13,9 @@ impl OptimizedImage for Avif {
     }
 }
 
-impl Into<Avif> for AvifData<'static> {
-    fn into(self) -> Avif {
-        Avif {
-            data: self,
-        }
+impl From<AvifData<'static>> for Avif {
+    fn from(data: AvifData<'static>) -> Self {
+        Avif { data }
     }
 }
 

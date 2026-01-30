@@ -61,7 +61,7 @@ fn run_job(config: SharedConfig, cache: CacheData, job: OptimizeJob) -> Result<(
 
     //read + resize ONCE per (image_id, size); encode the same DynamicImage
     //for every requested extension
-    let source = images::read(&base_image_path)?;
+    let source = images::read(base_image_path)?;
     let resized = images::resize(&source, size.width, size.height);
 
     for &extension in &job.extensions {
