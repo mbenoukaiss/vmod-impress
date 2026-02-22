@@ -1,4 +1,4 @@
-FROM rust:1.77-slim-bookworm
+FROM rust:1.95-slim-bookworm
 
 ARG USER_ID
 ARG GROUP_ID

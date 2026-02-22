@@ -103,7 +103,7 @@ impl Extension {
     }
 
     #[allow(clippy::wrong_self_convention)] //changing &self → self propagates lifetimes through callers in undesirable ways
-    pub fn to_media_type(&self) -> MediaType {
+    pub fn to_media_type(&self) -> MediaType<'_> {
         match self {
             Extension::AVIF => MediaType::new(IMAGE, AVIF),
             Extension::WEBP => MediaType::new(IMAGE, WEBP),

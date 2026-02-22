@@ -87,17 +87,3 @@ error_from!(Error::Other, bx varnish::vcl::Error);
 error_from!(Error::Other, bx log::SetLoggerError);
 error_from!(Error::Other, bx log4rs::config::runtime::ConfigErrors);
 
-pub trait MapResultString<T> {
-    fn or_display<S>(self, msg: S) -> Result<T, Error>
-    where
-        S: ToString;
-}
-
-impl<T, E> MapResultString<T> for Result<T, E> {
-    fn or_display<S>(self, msg: S) -> Result<T, Error>
-    where
-        S: ToString,
-    {
-        self.map_err(|_| Error::new(msg))
-    }
-}
