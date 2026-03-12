@@ -3,14 +3,11 @@ name = "vmod_impress"
 version = "0.1.0"
 edition = "2021"
 
-[build-dependencies]
-varnish = "0.0.19"
-
 [dev-dependencies]
 tempfile = "3"
 
 [dependencies]
-varnish = "0.0.19"
+varnish = "0.5.5"
 image = "0.24"
 webp = "0.2"
 libavif = "0.13"

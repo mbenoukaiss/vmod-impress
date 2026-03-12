@@ -83,7 +83,7 @@ error_from!(Error::Other, bx libavif::Error);
 error_from!(Error::Other, bx turbojpeg::Error);
 error_from!(Error::Other, bx image::ImageError);
 error_from!(Error::Other, bx std::io::Error);
-error_from!(Error::Other, bx varnish::vcl::Error);
+error_from!(Error::Other, bx varnish::vcl::VclError);
 error_from!(Error::Other, bx log::SetLoggerError);
 error_from!(Error::Other, bx log4rs::config::runtime::ConfigErrors);
 

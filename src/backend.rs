@@ -1,16 +1,20 @@
-use std::error::Error as StdError;
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{BufReader, ErrorKind, Read, Take};
 use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use headers_accept::Accept;
-use varnish::vcl::backend::{Serve, Transfer};
-use varnish::vcl::ctx::Ctx;
-use varnish::vcl::http::HTTP;
+use varnish::vcl::{Ctx, HttpHeaders, StrOrBytes, VclBackend, VclError, VclResponse};
 use crate::cache::{Cache, FetchResult};
 use crate::config::SharedConfig;
 use crate::error::Error;
+
+fn utf8_header(h: Option<StrOrBytes<'_>>) -> Option<&str> {
+    match h {
+        Some(StrOrBytes::Utf8(s)) => Some(s),
+        _ => None,
+    }
+}
 
 pub struct FileBackend {
     config: SharedConfig,
@@ -37,11 +41,12 @@ impl FileBackend {
     fn get_data(&self, ctx: &mut Ctx) -> Result<Option<FileTransfer>, Error> {
         let (method, url, if_none_match, if_modified_since, accept) = {
             let bereq = ctx.http_bereq.as_ref().ok_or_else(|| Error::new("Failed to get request data"))?;
+            let url_raw = utf8_header(bereq.url()).ok_or_else(|| Error::new("Failed to get URL"))?;
             (
-                bereq.method().unwrap_or("").to_owned(),
-                urlencoding::decode(bereq.url().ok_or_else(|| Error::new("Failed to get URL"))?)?.into_owned(),
-                bereq.header("if-none-match").map(str::to_owned),
-                bereq.header("if-modified-since").map(str::to_owned),
+                utf8_header(bereq.method()).unwrap_or("").to_owned(),
+                urlencoding::decode(url_raw)?.into_owned(),
+                utf8_header(bereq.header("if-none-match")).map(str::to_owned),
+                utf8_header(bereq.header("if-modified-since")).map(str::to_owned),
                 self.parse_accept_header(bereq),
             )
         };
@@ -109,31 +114,27 @@ impl FileBackend {
         }
     }
 
-    fn parse_accept_header(&self, bereq: &HTTP) -> Option<Accept> {
-        match bereq.header("accept") {
+    fn parse_accept_header(&self, bereq: &HttpHeaders) -> Option<Accept> {
+        match utf8_header(bereq.header("accept")) {
             Some(accept) if accept.trim() != "*/*" => Accept::from_str(accept).ok(),
             _ => None
         }
     }
 }
 
-impl Serve<FileTransfer> for FileBackend {
-    fn get_type(&self) -> &str {
-        "impress"
-    }
-
-    fn get_headers(&self, ctx: &mut Ctx) -> Result<Option<FileTransfer>, Box<dyn StdError>> {
+impl VclBackend<FileTransfer> for FileBackend {
+    fn get_response(&self, ctx: &mut Ctx) -> Result<Option<FileTransfer>, VclError> {
         match self.get_data(ctx) {
             Ok(transfer) => Ok(transfer),
             Err(e) if is_not_found(&e) => {
-                let beresp = ctx.http_beresp.as_mut().ok_or_else(|| Error::new("Failed to get response"))?;
+                let beresp = ctx.http_beresp.as_mut().ok_or_else(|| VclError::new("Failed to get response".to_owned()))?;
                 beresp.set_status(404);
                 Ok(None)
             }
             Err(e) => {
-                let beresp = ctx.http_beresp.as_mut().ok_or_else(|| Error::new("Failed to get response"))?;
+                let beresp = ctx.http_beresp.as_mut().ok_or_else(|| VclError::new("Failed to get response".to_owned()))?;
                 beresp.set_status(500);
-                beresp.set_header("error", &e.to_string())?;
+                let _ = beresp.set_header("error", &e.to_string());
 
                 Ok(None)
             }
@@ -153,9 +154,9 @@ impl FileTransfer {
     }
 }
 
-impl Transfer for FileTransfer {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Box<dyn StdError>> {
-        self.0.read(buf).map_err(|e| e.into())
+impl VclResponse for FileTransfer {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, VclError> {
+        self.0.read(buf).map_err(|e| VclError::new(e.to_string()))
     }
 
     fn len(&self) -> Option<usize> {

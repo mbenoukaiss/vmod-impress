@@ -1,5 +1,3 @@
-varnish::boilerplate!();
-
 #[macro_use]
 extern crate log;
 
@@ -13,45 +11,53 @@ mod images;
 mod error;
 mod utils;
 
-use std::sync::Arc;
 use log4rs::append::file::FileAppender;
-use log4rs::config::{Appender,Config as LogConfig, Root};
+use log4rs::config::{Appender, Config as LogConfig, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use log::LevelFilter;
-use varnish::vcl::ctx::Ctx;
-use varnish::vcl::backend::{Backend, VCLBackendPtr};
+use varnish::vcl::Backend;
 use crate::error::Error;
 use crate::backend::{FileBackend, FileTransfer};
-use crate::cache::Cache;
-use crate::config::{Config, Logger as LoggerConfig};
+use crate::config::Logger as LoggerConfig;
 
 #[allow(non_camel_case_types)]
-type new = Impress;
-
-struct Impress {
+struct new {
     backend: Backend<FileBackend, FileTransfer>,
 }
 
-impl Impress {
-    pub fn new(ctx: &mut Ctx, vcl_name: &str, path: Option<&str>) -> Result<Self, Error> {
-        let config = Arc::new(Config::open(path)?);
-        if let Some(logger) = &config.logger {
-            if let Err(e) = setup_logging(logger) {
-                //a misconfigured log file must not bring down the cache; surface it on stderr and continue
-                eprintln!("vmod-impress: failed to initialize logger ({}): continuing without file logging", e);
+#[varnish::vmod]
+mod impress {
+    use std::sync::Arc;
+    use varnish::ffi::VCL_BACKEND;
+    use varnish::vcl::{Backend, Ctx, VclError};
+
+    use super::{new, setup_logging, FileBackend};
+    use crate::cache::Cache;
+    use crate::config::Config;
+
+    impl new {
+        pub fn new(
+            ctx: &mut Ctx,
+            #[vcl_name] vcl_name: &str,
+            path: Option<&str>,
+        ) -> Result<Self, VclError> {
+            let config = Arc::new(Config::open(path).map_err(|e| VclError::new(e.to_string()))?);
+            if let Some(logger) = &config.logger {
+                if let Err(e) = setup_logging(logger) {
+                    eprintln!("vmod-impress: failed to initialize logger ({}): continuing without file logging", e);
+                }
             }
+
+            let cache = Cache::new(config.clone());
+            let backend = FileBackend::new(config, cache);
+            let backend = Backend::new(ctx, "impress", vcl_name, backend, false)?;
+
+            Ok(super::new { backend })
         }
 
-        let cache = Cache::new(config.clone());
-        let backend = FileBackend::new(config, cache);
-
-        let backend = Backend::new(ctx, vcl_name, backend, false)?;
-
-        Ok(Impress { backend })
-    }
-
-    pub fn backend(&self, _ctx: &Ctx) -> VCLBackendPtr {
-        self.backend.vcl_ptr()
+        pub unsafe fn backend(&self) -> VCL_BACKEND {
+            self.backend.vcl_ptr()
+        }
     }
 }
 
