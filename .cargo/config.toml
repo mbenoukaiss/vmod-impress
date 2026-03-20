@@ -1,0 +1,5 @@
+#x86-64-v3 baseline: AVX2 / Haswell-era (2013+). Modern Linux servers
+#and Varnish 7.5 itself wouldn't run on anything older. Drop or change
+#to "x86-64-v2" if you need to target truly old CPUs.
+[target.'cfg(all(target_arch = "x86_64", target_os = "linux"))']
+rustflags = ["-C", "target-cpu=x86-64-v3"]

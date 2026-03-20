@@ -54,9 +54,16 @@ impl CacheControl {
     }
 
     pub fn fallback_header(&self) -> String {
-        let max_age = self.fallback_max_age_seconds.unwrap_or(60);
-        let swr = self.fallback_stale_while_revalidate_seconds.unwrap_or(3_600);
-        format!("public, max-age={}, stale-while-revalidate={}", max_age, swr)
+        //the fallback path is what we serve while optimization is in flight, so
+        //it must NOT be cached at the HTTP layer — otherwise Varnish pins the
+        //un-optimized variant for the duration and never re-fetches once the
+        //optimized variant lands on disk
+        match (self.fallback_max_age_seconds, self.fallback_stale_while_revalidate_seconds) {
+            (None, None) => "no-cache".to_string(),
+            (Some(max_age), Some(swr)) => format!("public, max-age={max_age}, stale-while-revalidate={swr}"),
+            (Some(max_age), None) => format!("public, max-age={max_age}"),
+            (None, Some(_)) => "no-cache".to_string(),
+        }
     }
 }
 
@@ -470,7 +477,7 @@ mod tests {
         "#);
         let config = Config::parse(config_content).expect("config should parse");
         assert_eq!(config.cache_control_optimized, "public, max-age=86400, stale-while-revalidate=604800");
-        assert_eq!(config.cache_control_fallback, "public, max-age=60, stale-while-revalidate=3600");
+        assert_eq!(config.cache_control_fallback, "no-cache");
     }
 
     #[test]

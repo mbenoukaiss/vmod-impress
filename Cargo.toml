@@ -32,3 +32,27 @@ mediatype = "0.21"
 name = "vmod_impress"
 path = "src/lib.rs"
 crate-type = ["cdylib"]
+
+#The #[varnish::vmod] proc macro generates extern "C" shims with no
+#catch_unwind, so a Rust panic in user code propagates across the FFI
+#boundary and aborts the varnishd child either way. Keeping panic at
+#the default unwind here for conservatism and the ability to add a
+#std::panic::catch_unwind boundary later; switching to panic = "abort"
+#would also be safe and trim the .so a bit.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+strip = "symbols"
+debug = false
+overflow-checks = false
+incremental = false
+
+#fast-iteration profile for local dev: thin LTO + parallel codegen
+#keeps link times reasonable while still being a real release build.
+[profile.release-dev]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+strip = "none"
+debug = "line-tables-only"
