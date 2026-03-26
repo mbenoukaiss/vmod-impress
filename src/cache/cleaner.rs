@@ -66,7 +66,7 @@ pub fn sweep_once(config: &Config, data: &CacheData) -> std::io::Result<usize> {
                 if let Some(ext_enum) = Extension::from_ext(&parsed.ext) {
                     if let Ok(mut guard) = data.write() {
                         if let Some(image) = guard.get_mut(&parsed.image_id) {
-                            image.optimized.remove(&(parsed.size.clone(), ext_enum));
+                            image.optimized[ext_enum as usize].remove(&parsed.size);
                         }
                     }
                 }

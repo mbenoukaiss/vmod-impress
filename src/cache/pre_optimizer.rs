@@ -34,7 +34,7 @@ pub fn spawn(config: SharedConfig, data: CacheData, create_image_tx: Sender<Opti
                 //one job per (image_id, size) covering all configured extensions
                 //that don't already exist on disk
                 let missing: Vec<_> = config.extensions.iter()
-                    .filter(|ext| !cache.optimized.contains_key(&((*size_name).clone(), **ext)))
+                    .filter(|ext| !cache.has(size_name, **ext))
                     .copied()
                     .collect();
 

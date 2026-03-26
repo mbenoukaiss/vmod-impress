@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::{fs, mem, sync, thread};
-use std::collections::HashMap;
 use image::ImageFormat;
 use notify::{Config as NotifyConfig, Error as NotifyError, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use notify::event::{AccessKind, AccessMode, ModifyKind, RemoveKind, RenameMode};
@@ -71,12 +70,14 @@ fn handle_modification(event: Event, config: &Config, data: &CacheData, create_i
         if let Some(cache) = lock.get_mut(&image_id) {
             mem::take(&mut cache.optimized)
         } else {
-            HashMap::new()
+            Default::default()
         }
     };
 
-    for path in to_delete.values() {
-        fs::remove_file(path)?;
+    for bucket in &to_delete {
+        for path in bucket.values() {
+            fs::remove_file(path)?;
+        }
     }
 
     //one OptimizeJob per (image_id, size) covering all configured extensions —
@@ -117,8 +118,10 @@ fn handle_deletion(event: Event, config: &Config, data: &CacheData) -> Result<()
     let image = data.write()?.remove(&image_id);
 
     if let Some(image) = image {
-        for (_, path) in image.optimized {
-            fs::remove_file(path)?;
+        for bucket in image.optimized {
+            for (_, path) in bucket {
+                fs::remove_file(path)?;
+            }
         }
     }
 

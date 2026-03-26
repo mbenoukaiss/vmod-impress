@@ -237,7 +237,11 @@ pub struct CacheImage {
     //Stored once at insert so the request hot path doesn't re-stat the path
     //or re-call ImageFormat::from_path on every request.
     pub base_mime: &'static str,
-    pub optimized: HashMap<(String, Extension), String>, //associating size and extension to the path
+    //Indexed by Extension as usize (JPEG=0, WEBP=1, AVIF=2). The hot-path
+    //lookup is `self.optimized[ext as usize].get(size_str)` which doesn't
+    //need to allocate a key — `HashMap<String, _>::get(&str)` works via
+    //the Borrow impl.
+    pub optimized: [HashMap<String, String>; 3],
 }
 
 impl CacheImage {
@@ -245,20 +249,20 @@ impl CacheImage {
         CacheImage {
             base_image_path,
             base_mime,
-            optimized: HashMap::new(),
+            optimized: [HashMap::new(), HashMap::new(), HashMap::new()],
         }
     }
 
     pub fn add<P: AsRef<Path>>(&mut self, size: String, ext: Extension, path: P) {
-        self.optimized.insert((size, ext), path.as_ref().to_string_lossy().to_string());
+        self.optimized[ext as usize].insert(size, path.as_ref().to_string_lossy().to_string());
     }
 
     pub fn get(&self, size: &str, ext: Extension) -> Option<&String> {
-        self.optimized.get(&(size.to_string(), ext))
+        self.optimized[ext as usize].get(size)
     }
 
     pub fn has(&self, size: &str, ext: Extension) -> bool {
-        self.optimized.contains_key(&(size.to_string(), ext))
+        self.optimized[ext as usize].contains_key(size)
     }
 }
 
