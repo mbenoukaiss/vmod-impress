@@ -5,6 +5,7 @@ mod watcher;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Deref;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -139,7 +140,9 @@ impl Cache {
                             continue;
                         }
 
-                        item.add(size.to_owned(), extension.to_owned(), path);
+                        if let Err(e) = item.add(size.to_owned(), extension.to_owned(), &path) {
+                            error!("failed to read metadata for cache file {:?}: {}", path, e);
+                        }
                     }
                 }
 
@@ -174,11 +177,11 @@ impl Cache {
             .and_then(|media_type| Extension::from_ext(media_type.subty.as_str()))
             .unwrap_or(self.config.default_format);
 
-        if let Some(file) = cache.get(size, appropriate_extension) {
-            let path = Path::new(file);
+        if let Some(variant) = cache.get(size, appropriate_extension) {
+            let path = Path::new(&variant.path);
 
             if path.exists() {
-                return read_image(file, true, appropriate_extension.mime_str());
+                return read_image_optimized(variant, appropriate_extension.mime_str());
             } else {
                 //the image was in cache but the file did not exist, maybe it got deleted
                 self.enqueue_optimize(image_id, size, vec![appropriate_extension]);
@@ -186,7 +189,7 @@ impl Cache {
         }
 
         //return the image as is, it will be optimized later
-        read_image(&cache.base_image_path, false, cache.base_mime)
+        read_image_fallback(&cache.base_image_path, cache.base_mime)
     }
 
     fn enqueue_optimize(&self, image_id: &str, size: &str, extensions: Vec<Extension>) {
@@ -217,17 +220,87 @@ impl Cache {
     }
 }
 
-fn read_image(path: &str, is_optimized: bool, mime: &'static str) -> Result<Option<FetchResult>, Error> {
+fn read_image_optimized(variant: &CacheVariant, mime: &'static str) -> Result<Option<FetchResult>, Error> {
+    let file = File::open(&variant.path)?;
+    Ok(Some(FetchResult {
+        data: FileTransfer::new(file, variant.size),
+        last_modified: variant.last_modified,
+        last_modified_str: variant.last_modified_str.clone(),
+        etag: variant.etag.clone(),
+        content_length_str: variant.content_length_str.clone(),
+        mime,
+        is_optimized: true,
+    }))
+}
+
+fn read_image_fallback(path: &str, mime: &'static str) -> Result<Option<FetchResult>, Error> {
     let file = File::open(path)?;
     let metadata = file.metadata()?;
+    let size = metadata.len();
+    let last_modified: DateTime<Utc> = DateTime::from(metadata.modified()?);
+    let inode = metadata.ino();
+    let last_modified_str = format_http_date(last_modified);
+    let content_length_str = size.to_string();
+    let etag = compute_etag(inode, size, last_modified.timestamp(), false);
 
     Ok(Some(FetchResult {
-        data: FileTransfer::new(file, metadata.len()),
-        last_modified: DateTime::from(metadata.modified()?),
-        inode: metadata.ino(),
+        data: FileTransfer::new(file, size),
+        last_modified,
+        last_modified_str: Arc::from(last_modified_str.as_str()),
+        etag: Arc::from(etag.as_str()),
+        content_length_str: Arc::from(content_length_str.as_str()),
         mime,
-        is_optimized,
+        is_optimized: false,
     }))
+}
+
+fn format_http_date(dt: DateTime<Utc>) -> String {
+    dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string()
+}
+
+fn compute_etag(inode: u64, size: u64, mtime_secs: i64, is_optimized: bool) -> String {
+    let mut h = DefaultHasher::new();
+    //match the original tuple shape (u64, usize, i64, bool) so etags
+    //don't change across the refactor — clients with cached If-None-Match
+    //keep getting 304s on unchanged variants
+    (inode, size as usize, mtime_secs, is_optimized).hash(&mut h);
+    format!("\"{}\"", h.finish())
+}
+
+#[derive(Clone, Debug)]
+pub struct CacheVariant {
+    pub path: String,
+    pub size: u64,
+    pub last_modified: DateTime<Utc>,
+    //Pre-built header-value strings stored as Arc<str>: cloning is a refcount
+    //bump (no allocation, no copy) and the same bytes are shared across
+    //every request that hits this variant.
+    pub last_modified_str: Arc<str>,
+    pub content_length_str: Arc<str>,
+    pub etag: Arc<str>,
+}
+
+impl CacheVariant {
+    pub fn from_path<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        let path_ref = path.as_ref();
+        let metadata = fs::metadata(path_ref)?;
+        let last_modified: DateTime<Utc> = DateTime::from(metadata.modified()?);
+        let size = metadata.len();
+        let inode = metadata.ino();
+
+        let last_modified_str = format_http_date(last_modified);
+        let content_length_str = size.to_string();
+        let etag = compute_etag(inode, size, last_modified.timestamp(), true);
+
+        Ok(CacheVariant {
+            path: path_ref.to_string_lossy().to_string(),
+            size,
+            last_modified,
+            last_modified_str: Arc::from(last_modified_str.as_str()),
+            content_length_str: Arc::from(content_length_str.as_str()),
+            etag: Arc::from(etag.as_str()),
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -240,8 +313,9 @@ pub struct CacheImage {
     //Indexed by Extension as usize (JPEG=0, WEBP=1, AVIF=2). The hot-path
     //lookup is `self.optimized[ext as usize].get(size_str)` which doesn't
     //need to allocate a key — `HashMap<String, _>::get(&str)` works via
-    //the Borrow impl.
-    pub optimized: [HashMap<String, String>; 3],
+    //the Borrow impl. CacheVariant carries the path plus pre-built
+    //header strings so the per-request response build is allocation-free.
+    pub optimized: [HashMap<String, CacheVariant>; 3],
 }
 
 impl CacheImage {
@@ -253,11 +327,13 @@ impl CacheImage {
         }
     }
 
-    pub fn add<P: AsRef<Path>>(&mut self, size: String, ext: Extension, path: P) {
-        self.optimized[ext as usize].insert(size, path.as_ref().to_string_lossy().to_string());
+    pub fn add<P: AsRef<Path>>(&mut self, size: String, ext: Extension, path: P) -> std::io::Result<()> {
+        let variant = CacheVariant::from_path(path)?;
+        self.optimized[ext as usize].insert(size, variant);
+        Ok(())
     }
 
-    pub fn get(&self, size: &str, ext: Extension) -> Option<&String> {
+    pub fn get(&self, size: &str, ext: Extension) -> Option<&CacheVariant> {
         self.optimized[ext as usize].get(size)
     }
 
@@ -270,7 +346,9 @@ impl CacheImage {
 pub struct FetchResult {
     pub data: FileTransfer,
     pub last_modified: DateTime<Utc>,
-    pub inode: u64,
+    pub last_modified_str: Arc<str>,
+    pub etag: Arc<str>,
+    pub content_length_str: Arc<str>,
     pub mime: &'static str,
     pub is_optimized: bool,
 }

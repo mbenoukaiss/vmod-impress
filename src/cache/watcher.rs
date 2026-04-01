@@ -75,8 +75,8 @@ fn handle_modification(event: Event, config: &Config, data: &CacheData, create_i
     };
 
     for bucket in &to_delete {
-        for path in bucket.values() {
-            fs::remove_file(path)?;
+        for variant in bucket.values() {
+            fs::remove_file(&variant.path)?;
         }
     }
 
@@ -119,8 +119,8 @@ fn handle_deletion(event: Event, config: &Config, data: &CacheData) -> Result<()
 
     if let Some(image) = image {
         for bucket in image.optimized {
-            for (_, path) in bucket {
-                fs::remove_file(path)?;
+            for (_, variant) in bucket {
+                fs::remove_file(&variant.path)?;
             }
         }
     }

@@ -89,7 +89,9 @@ fn run_job(config: SharedConfig, cache: CacheData, job: OptimizeJob) -> Result<(
 
         if let Ok(mut guard) = cache.write() {
             if let Some(image) = guard.get_mut(&job.image_id) {
-                image.add(job.size.clone(), extension, &path);
+                if let Err(e) = image.add(job.size.clone(), extension, &path) {
+                    error!("failed to record cache variant {:?}: {}", path, e);
+                }
             }
         }
     }

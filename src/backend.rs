@@ -1,11 +1,10 @@
 use std::fs::File;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{BufReader, ErrorKind, Read, Take};
 use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use headers_accept::Accept;
 use varnish::vcl::{Ctx, HttpHeaders, StrOrBytes, VclBackend, VclError, VclResponse};
-use crate::cache::{Cache, FetchResult};
+use crate::cache::Cache;
 use crate::config::SharedConfig;
 use crate::error::Error;
 
@@ -70,12 +69,11 @@ impl FileBackend {
             }
         };
 
-        let etag = generate_etag(&result);
         let shape = decide_response_shape(
             &method,
             if_none_match.as_deref(),
             if_modified_since.as_deref(),
-            &etag,
+            &result.etag,
             result.last_modified,
         );
 
@@ -96,16 +94,16 @@ impl FileBackend {
             }
             ResponseShape::NotModified => {
                 beresp.set_status(304);
-                beresp.set_header("ETag", &etag)?;
+                beresp.set_header("ETag", &result.etag)?;
                 beresp.set_header("Vary", "Accept")?;
                 beresp.set_header("Cache-Control", cache_control)?;
                 Ok(None)
             }
             ResponseShape::Ok { send_body } => {
                 beresp.set_status(200);
-                beresp.set_header("ETag", &etag)?;
-                beresp.set_header("Last-Modified", &result.last_modified.format("%a, %d %b %Y %H:%M:%S GMT").to_string())?;
-                beresp.set_header("Content-Length", &result.data.size().to_string())?;
+                beresp.set_header("ETag", &result.etag)?;
+                beresp.set_header("Last-Modified", &result.last_modified_str)?;
+                beresp.set_header("Content-Length", &result.content_length_str)?;
                 beresp.set_header("Content-Type", result.mime)?;
                 beresp.set_header("Vary", "Accept")?;
                 beresp.set_header("Cache-Control", cache_control)?;
@@ -195,12 +193,6 @@ fn etag_matches(client: &str, ours: &str) -> bool {
         s.strip_prefix("W/").unwrap_or(s).trim_matches('"').to_owned()
     };
     normalize(client) == normalize(ours)
-}
-
-fn generate_etag(result: &FetchResult) -> String {
-    let mut h = DefaultHasher::new();
-    (result.inode, result.data.size(), result.last_modified.timestamp(), result.is_optimized).hash(&mut h);
-    format!("\"{}\"", h.finish())
 }
 
 fn is_not_found(error: &Error) -> bool {
