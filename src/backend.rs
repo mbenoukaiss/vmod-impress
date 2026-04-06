@@ -38,24 +38,39 @@ enum ResponseShape {
 
 impl FileBackend {
     fn get_data(&self, ctx: &mut Ctx) -> Result<Option<FileTransfer>, Error> {
-        let (method, url, if_none_match, if_modified_since, accept) = {
+        //hold bereq's borrow for the whole read-side of the request so we
+        //don't allocate a String for every header value just to outlive
+        //the borrow. shape is computed inside the same scope while the
+        //bereq-borrowed &str slices are still alive; the scope returns
+        //owned values (FetchResult, ResponseShape) that no longer touch bereq,
+        //so we can switch to &mut beresp afterwards via disjoint-field borrow
+        let (shape, result) = {
             let bereq = ctx.http_bereq.as_ref().ok_or_else(|| Error::new("Failed to get request data"))?;
             let url_raw = utf8_header(bereq.url()).ok_or_else(|| Error::new("Failed to get URL"))?;
-            (
-                utf8_header(bereq.method()).unwrap_or("").to_owned(),
-                urlencoding::decode(url_raw)?.into_owned(),
-                utf8_header(bereq.header("if-none-match")).map(str::to_owned),
-                utf8_header(bereq.header("if-modified-since")).map(str::to_owned),
-                self.parse_accept_header(bereq),
-            )
-        };
+            let method = utf8_header(bereq.method()).unwrap_or("");
+            let if_none_match = utf8_header(bereq.header("if-none-match"));
+            let if_modified_since = utf8_header(bereq.header("if-modified-since"));
+            let accept = self.parse_accept_header(bereq);
+            //escape-free URLs come back Borrowed; we only allocate when the URL
+            //actually contains percent-encodings
+            let url = urlencoding::decode(url_raw)?;
 
-        let pattern = self.config.url_regex.as_ref().expect("Badly initialized config");
-        let result = match pattern.captures(&url) {
-            Some(captures) if self.config.sizes.get(&captures["size"]).map_or(false, |p| p.matches(&captures["path"])) => {
-                self.cache.get(&captures["path"], &captures["size"], accept)?
-            }
-            _ => None,
+            let pattern = self.config.url_regex.as_ref().expect("Badly initialized config");
+            let result = match pattern.captures(&url) {
+                Some(captures) if self.config.sizes.get(&captures["size"]).map_or(false, |p| p.matches(&captures["path"])) => {
+                    self.cache.get(&captures["path"], &captures["size"], accept)?
+                }
+                _ => None,
+            };
+
+            let shape = result.as_ref().map(|r| decide_response_shape(
+                method,
+                if_none_match,
+                if_modified_since,
+                &r.etag,
+                r.last_modified,
+            ));
+            (shape, result)
         };
 
         let beresp = ctx.http_beresp.as_mut().ok_or_else(|| Error::new("Failed to get response"))?;
@@ -68,14 +83,8 @@ impl FileBackend {
                 return Ok(None);
             }
         };
-
-        let shape = decide_response_shape(
-            &method,
-            if_none_match.as_deref(),
-            if_modified_since.as_deref(),
-            &result.etag,
-            result.last_modified,
-        );
+        //result was Some so shape was computed
+        let shape = shape.expect("shape must be Some when result is Some");
 
         //serve stale-while-revalidate: Varnish reads stale-while-revalidate=N
         //from beresp.Cache-Control and uses it as beresp.grace, so it serves
