@@ -27,6 +27,7 @@ rusty_pool = { version = "0.7", default-features = false }
 urlencoding = "2.1"
 headers-accept = "0.3"
 mediatype = "0.21"
+parking_lot = "0.12"
 
 [lib]
 name = "vmod_impress"

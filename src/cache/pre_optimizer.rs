@@ -10,15 +10,7 @@ pub fn spawn(config: SharedConfig, data: CacheData, create_image_tx: Sender<Opti
         return;
     }
 
-    let data = match data.read() {
-        Ok(guard) => (*guard).clone(),
-        Err(e) => {
-            //a poisoned RwLock here means an earlier panic poisoned the cache;
-            //the runtime cache still works, only pre-warm is lost
-            error!("pre-optimizer skipped: cache lock poisoned ({})", e);
-            return;
-        }
-    };
+    let data = (*data.read()).clone();
 
     thread::spawn(move || {
         let pre_optimize_sizes: Vec<(&String, &crate::config::Size)> = config.sizes.iter()
@@ -43,14 +35,9 @@ pub fn spawn(config: SharedConfig, data: CacheData, create_image_tx: Sender<Opti
                 }
 
                 let key = (image_id.clone(), (*size_name).clone());
-                match in_flight.lock() {
-                    Ok(mut guard) => {
-                        if !guard.insert(key.clone()) {
-                            //another caller already enqueued this (image_id, size)
-                            continue;
-                        }
-                    }
-                    Err(_) => continue,
+                if !in_flight.lock().insert(key.clone()) {
+                    //another caller already enqueued this (image_id, size)
+                    continue;
                 }
 
                 if let Err(e) = create_image_tx.send(OptimizeJob {
@@ -60,9 +47,7 @@ pub fn spawn(config: SharedConfig, data: CacheData, create_image_tx: Sender<Opti
                 }) {
                     //file_saver thread died; release the slot we just claimed and stop
                     error!("pre-optimizer aborting: optimization channel closed ({})", e);
-                    if let Ok(mut guard) = in_flight.lock() {
-                        guard.remove(&key);
-                    }
+                    in_flight.lock().remove(&key);
                     return;
                 }
             }

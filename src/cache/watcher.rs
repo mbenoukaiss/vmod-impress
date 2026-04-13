@@ -58,7 +58,7 @@ fn handle_modification(event: Event, config: &Config, data: &CacheData, create_i
     let image_id = get_image_id(&image_path, config);
 
     let to_delete = {
-        let mut lock = data.write()?;
+        let mut lock = data.write();
 
         if !lock.contains_key(&image_id) {
             let mime = ImageFormat::from_path(&image_path)
@@ -86,13 +86,8 @@ fn handle_modification(event: Event, config: &Config, data: &CacheData, create_i
         .filter(|(_, size)| size.matches(&image_id) && size.pre_optimize.unwrap_or(false))
     {
         let key = (image_id.clone(), size_name.clone());
-        match in_flight.lock() {
-            Ok(mut guard) => {
-                if !guard.insert(key.clone()) {
-                    continue;
-                }
-            }
-            Err(_) => continue,
+        if !in_flight.lock().insert(key.clone()) {
+            continue;
         }
 
         if let Err(e) = create_image_tx.send(OptimizeJob {
@@ -101,9 +96,7 @@ fn handle_modification(event: Event, config: &Config, data: &CacheData, create_i
             extensions: config.extensions.clone(),
         }) {
             error!("watcher: optimize channel closed: {}", e);
-            if let Ok(mut guard) = in_flight.lock() {
-                guard.remove(&key);
-            }
+            in_flight.lock().remove(&key);
             return Ok(());
         }
     }
@@ -115,7 +108,7 @@ fn handle_deletion(event: Event, config: &Config, data: &CacheData) -> Result<()
     let image_path = get_image_path(&event)?;
     let image_id = get_image_id(&image_path, config);
 
-    let image = data.write()?.remove(&image_id);
+    let image = data.write().remove(&image_id);
 
     if let Some(image) = image {
         for bucket in image.optimized {

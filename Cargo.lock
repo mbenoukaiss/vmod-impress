@@ -2221,6 +2221,7 @@ dependencies = [
  "log4rs",
  "mediatype",
  "notify",
+ "parking_lot",
  "regex",
  "ron",
  "rusty_pool",

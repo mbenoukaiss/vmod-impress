@@ -9,9 +9,10 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Deref;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc, Mutex, RwLock};
+use std::sync::{Arc, mpsc};
 use std::sync::mpsc::Sender;
 use std::thread;
+use parking_lot::{Mutex, RwLock};
 use chrono::{DateTime, Utc};
 use headers_accept::Accept;
 use image::ImageFormat;
@@ -71,7 +72,7 @@ impl Cache {
     }
 
     fn load_images(config: &Config, images: CacheData) {
-        let mut lock = images.write().unwrap();
+        let mut lock = images.write();
 
         let supported_extensions = ImageFormat::all()
             .flat_map(ImageFormat::extensions_str)
@@ -152,7 +153,7 @@ impl Cache {
     }
 
     pub fn get(&self, image_id: &str, size: &str, accept: Option<Accept>) -> Result<Option<FetchResult>, Error> {
-        let lock = self.data.read()?;
+        let lock = self.data.read();
         let Some(cache) = lock.get(image_id) else {
             return Ok(None);
         };
@@ -206,13 +207,8 @@ impl Cache {
         let key = (image_id.to_owned(), size.to_owned());
         //dedup: don't enqueue a second job for the same (image_id, size) if one
         //is already in flight; the in-flight job covers the work
-        match self.in_flight.lock() {
-            Ok(mut guard) => {
-                if !guard.insert(key.clone()) {
-                    return;
-                }
-            }
-            Err(_) => return,
+        if !self.in_flight.lock().insert(key.clone()) {
+            return;
         }
 
         if let Err(e) = self.create_image_tx.send(OptimizeJob {
@@ -223,9 +219,7 @@ impl Cache {
             //channel closed (saver thread died); release the in_flight slot
             //so the slot doesn't leak forever
             error!("optimize channel closed: {}", e);
-            if let Ok(mut guard) = self.in_flight.lock() {
-                guard.remove(&(image_id.to_owned(), size.to_owned()));
-            }
+            self.in_flight.lock().remove(&(image_id.to_owned(), size.to_owned()));
         }
     }
 }

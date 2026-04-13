@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use parking_lot::Mutex;
 use std::thread;
 use std::time::Duration;
 use rusty_pool::ThreadPool;
@@ -40,9 +41,7 @@ pub fn spawn(config: SharedConfig, data: CacheData, in_flight: InFlight, rx: Rec
                 }
                 //always release in_flight, success or failure — otherwise a
                 //permanently-failing image would block future retries
-                if let Ok(mut guard) = task_in_flight.lock() {
-                    guard.remove(&key);
-                }
+                task_in_flight.lock().remove(&key);
             })
         }
     });
@@ -54,7 +53,7 @@ fn run_job(config: SharedConfig, cache: CacheData, job: OptimizeJob) -> Result<(
     };
 
     let base_image_path = {
-        let lock = cache.read()?;
+        let lock = cache.read();
         let data = lock.get(&job.image_id).ok_or(Error::new("Image not found"))?;
         data.base_image_path.clone()
     };
@@ -87,13 +86,13 @@ fn run_job(config: SharedConfig, cache: CacheData, job: OptimizeJob) -> Result<(
             continue;
         }
 
-        if let Ok(mut guard) = cache.write() {
-            if let Some(image) = guard.get_mut(&job.image_id) {
-                if let Err(e) = image.add(job.size.clone(), extension, &path) {
-                    error!("failed to record cache variant {:?}: {}", path, e);
-                }
+        let mut guard = cache.write();
+        if let Some(image) = guard.get_mut(&job.image_id) {
+            if let Err(e) = image.add(job.size.clone(), extension, &path) {
+                error!("failed to record cache variant {:?}: {}", path, e);
             }
         }
+        drop(guard);
     }
 
     Ok(())

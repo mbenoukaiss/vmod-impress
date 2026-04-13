@@ -64,10 +64,9 @@ pub fn sweep_once(config: &Config, data: &CacheData) -> std::io::Result<usize> {
                 removed += 1;
                 debug!("cleaner: removed orphan cache file {:?}", path);
                 if let Some(ext_enum) = Extension::from_ext(&parsed.ext) {
-                    if let Ok(mut guard) = data.write() {
-                        if let Some(image) = guard.get_mut(&parsed.image_id) {
-                            image.optimized[ext_enum as usize].remove(&parsed.size);
-                        }
+                    let mut guard = data.write();
+                    if let Some(image) = guard.get_mut(&parsed.image_id) {
+                        image.optimized[ext_enum as usize].remove(&parsed.size);
                     }
                 }
             }
@@ -114,18 +113,15 @@ fn is_orphan(config: &Config, data: &CacheData, parsed: &CacheFilename) -> bool 
     if !configured_ext {
         return true;
     }
-    match data.read() {
-        Ok(guard) => !guard.contains_key(&parsed.image_id),
-        //if the lock is poisoned, treat as not-orphan (don't risk deleting good data)
-        Err(_) => false,
-    }
+    !data.read().contains_key(&parsed.image_id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::{Arc, RwLock};
+    use std::sync::Arc;
+    use parking_lot::RwLock;
     use crate::cache::CacheImage;
     use crate::config::{Extension, Size};
     use tempfile::TempDir;
