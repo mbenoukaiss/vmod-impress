@@ -167,15 +167,25 @@ impl Cache {
             self.enqueue_optimize(image_id, size, missing);
         }
 
-        let converted_extensions = self.config.extensions.iter()
-            .filter(|ext| cache.has(size, **ext))
-            .map(|ext| ext.to_media_type())
-            .collect::<Vec<MediaType>>();
-
-        let appropriate_extension = accept.as_ref()
-            .and_then(|accept| accept.negotiate(converted_extensions.iter()))
-            .and_then(|media_type| Extension::from_ext(media_type.subty.as_str()))
-            .unwrap_or(self.config.default_format);
+        //negotiate only matters when the client sent an Accept header. Without
+        //one we go straight to default_format, skipping the whole MediaType
+        //buffer build. With one we fill a stack array (config.extensions has
+        //at most 3 entries) instead of heap-allocating a Vec per request.
+        let appropriate_extension = if let Some(accept) = accept.as_ref() {
+            let mut media_buf: [MediaType<'static>; 3] = std::array::from_fn(|_| Extension::JPEG.to_media_type());
+            let mut n = 0;
+            for ext in &self.config.extensions {
+                if cache.has(size, *ext) {
+                    media_buf[n] = ext.to_media_type();
+                    n += 1;
+                }
+            }
+            accept.negotiate(media_buf[..n].iter())
+                .and_then(|media_type| Extension::from_ext(media_type.subty.as_str()))
+                .unwrap_or(self.config.default_format)
+        } else {
+            self.config.default_format
+        };
 
         if let Some(variant) = cache.get(size, appropriate_extension) {
             let path = Path::new(&variant.path);
