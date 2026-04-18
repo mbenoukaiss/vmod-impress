@@ -19,6 +19,7 @@ use image::ImageFormat;
 use mediatype::MediaType;
 use walkdir::WalkDir;
 use crate::backend::FileTransfer;
+use crate::static_files::Transfer;
 use crate::cache::file_saver::{InFlight, OptimizeJob};
 use crate::config::{Config, Extension, SharedConfig};
 use crate::error::Error;
@@ -192,7 +193,11 @@ impl Cache {
             let path = Path::new(&variant.path);
 
             if path.exists() {
-                return read_image_optimized(variant, appropriate_extension.mime_str());
+                return read_image_optimized(
+                    variant,
+                    appropriate_extension.mime_str(),
+                    self.config.cache_control_value.clone(),
+                );
             } else {
                 //the image was in cache but the file did not exist, maybe it got deleted
                 self.enqueue_optimize(image_id, size, vec![appropriate_extension]);
@@ -200,7 +205,11 @@ impl Cache {
         }
 
         //return the image as is, it will be optimized later
-        read_image_fallback(&cache.base_image_path, cache.base_mime)
+        read_image_fallback(
+            &cache.base_image_path,
+            cache.base_mime,
+            self.config.cache_control_fallback.clone(),
+        )
     }
 
     fn enqueue_optimize(&self, image_id: &str, size: &str, extensions: Vec<Extension>) {
@@ -224,20 +233,29 @@ impl Cache {
     }
 }
 
-fn read_image_optimized(variant: &CacheVariant, mime: &'static str) -> Result<Option<FetchResult>, Error> {
+fn read_image_optimized(
+    variant: &CacheVariant,
+    mime: &'static str,
+    cache_control: Arc<str>,
+) -> Result<Option<FetchResult>, Error> {
     let file = File::open(&variant.path)?;
     Ok(Some(FetchResult {
-        data: FileTransfer::new(file, variant.size),
+        data: Transfer::File(FileTransfer::new(file, variant.size)),
         last_modified: variant.last_modified,
         last_modified_str: variant.last_modified_str.clone(),
         etag: variant.etag.clone(),
         content_length_str: variant.content_length_str.clone(),
         mime,
         is_optimized: true,
+        cache_control,
     }))
 }
 
-fn read_image_fallback(path: &str, mime: &'static str) -> Result<Option<FetchResult>, Error> {
+fn read_image_fallback(
+    path: &str,
+    mime: &'static str,
+    cache_control: Arc<str>,
+) -> Result<Option<FetchResult>, Error> {
     let file = File::open(path)?;
     let metadata = file.metadata()?;
     let size = metadata.len();
@@ -248,21 +266,22 @@ fn read_image_fallback(path: &str, mime: &'static str) -> Result<Option<FetchRes
     let etag = compute_etag(inode, size, last_modified.timestamp(), false);
 
     Ok(Some(FetchResult {
-        data: FileTransfer::new(file, size),
+        data: Transfer::File(FileTransfer::new(file, size)),
         last_modified,
         last_modified_str: Arc::from(last_modified_str.as_str()),
         etag: Arc::from(etag.as_str()),
         content_length_str: Arc::from(content_length_str.as_str()),
         mime,
         is_optimized: false,
+        cache_control,
     }))
 }
 
-fn format_http_date(dt: DateTime<Utc>) -> String {
+pub(crate) fn format_http_date(dt: DateTime<Utc>) -> String {
     dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string()
 }
 
-fn compute_etag(inode: u64, size: u64, mtime_secs: i64, is_optimized: bool) -> String {
+pub(crate) fn compute_etag(inode: u64, size: u64, mtime_secs: i64, is_optimized: bool) -> String {
     let mut h = DefaultHasher::new();
     //match the original tuple shape (u64, usize, i64, bool) so etags
     //don't change across the refactor — clients with cached If-None-Match
@@ -348,11 +367,15 @@ impl CacheImage {
 
 
 pub struct FetchResult {
-    pub data: FileTransfer,
+    pub data: Transfer,
     pub last_modified: DateTime<Utc>,
     pub last_modified_str: Arc<str>,
     pub etag: Arc<str>,
     pub content_length_str: Arc<str>,
     pub mime: &'static str,
     pub is_optimized: bool,
+    /// Pre-picked Cache-Control header value. The producer of FetchResult
+    /// is responsible for choosing optimized vs fallback so the response
+    /// path doesn't have to branch.
+    pub cache_control: Arc<str>,
 }

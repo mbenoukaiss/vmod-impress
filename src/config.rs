@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use image::ImageFormat;
 use log::LevelFilter;
@@ -24,48 +25,133 @@ pub struct Config {
     pub pre_optimizer_threads: Option<usize>,
     pub sizes: HashMap<String, Size>,
     pub logger: Option<Logger>,
-    pub cache_control: Option<CacheControl>,
+    /// Cache-Control header value sent on optimized responses (image cache
+    /// hits and static-file responses). Defaults to
+    /// `"public, max-age=86400, stale-while-revalidate=604800"`. The image
+    /// in-flight fallback (raw source served while the optimizer is running)
+    /// always uses `"no-cache"` and is not user-tunable — caching the raw
+    /// bytes for any non-trivial duration would pin the un-optimized variant
+    /// at the HTTP layer until the next mtime change.
+    pub cache_control: Option<String>,
 
     #[serde(skip_deserializing)]
     pub url_regex: Option<Regex>,
-    //precomputed once at parse time so the hot path is allocation-free
+    //resolved once at parse time as Arc<str> so the hot path can clone
+    //refcounts into FetchResult without allocating
     #[serde(skip_deserializing)]
-    pub cache_control_optimized: String,
+    pub cache_control_value: Arc<str>,
     #[serde(skip_deserializing)]
-    pub cache_control_fallback: String,
+    pub cache_control_fallback: Arc<str>,
 
     #[serde(rename = "qualities")]
     pub quality_serialized: Option<HashMap<Extension, f32>>,
+
+    #[serde(default, rename = "static")]
+    pub statics: Vec<StaticRoute>,
 }
 
-#[derive(Deserialize, Clone, Debug, Default)]
-pub struct CacheControl {
-    pub optimized_max_age_seconds: Option<u64>,
-    pub optimized_stale_while_revalidate_seconds: Option<u64>,
-    pub fallback_max_age_seconds: Option<u64>,
-    pub fallback_stale_while_revalidate_seconds: Option<u64>,
+#[derive(Deserialize, Clone, Debug)]
+pub struct StaticRoute {
+    pub url: String,
+    pub root: String,
+    /// Per-route Cache-Control override. When unset, the route uses the
+    /// global `Config.cache_control` (which itself falls back to the
+    /// built-in default). Static routes have no in-flight fallback notion,
+    /// so this single value is the only Cache-Control they ever emit.
+    pub cache_control: Option<String>,
+    #[serde(default)]
+    pub optimization: Optimization,
+    /// Skip optimization for files larger than this many bytes; the source
+    /// is streamed from disk instead. Default 2 MiB. `Some(0)` removes the
+    /// cap and runs the optimizer regardless of size — use with care, the
+    /// optimizers all need the whole document resident in heap.
+    pub optimize_max_bytes: Option<usize>,
+
+    #[serde(skip_deserializing)]
+    pub url_regex: Option<Regex>,
+    #[serde(skip_deserializing)]
+    pub root_canon: Option<PathBuf>,
+    #[serde(skip_deserializing)]
+    pub cache_control_value: Arc<str>,
 }
 
-impl CacheControl {
-    pub fn optimized_header(&self) -> String {
-        let max_age = self.optimized_max_age_seconds.unwrap_or(86_400);
-        let swr = self.optimized_stale_while_revalidate_seconds.unwrap_or(604_800);
-        format!("public, max-age={}, stale-while-revalidate={}", max_age, swr)
-    }
-
-    pub fn fallback_header(&self) -> String {
-        //the fallback path is what we serve while optimization is in flight, so
-        //it must NOT be cached at the HTTP layer — otherwise Varnish pins the
-        //un-optimized variant for the duration and never re-fetches once the
-        //optimized variant lands on disk
-        match (self.fallback_max_age_seconds, self.fallback_stale_while_revalidate_seconds) {
-            (None, None) => "no-cache".to_string(),
-            (Some(max_age), Some(swr)) => format!("public, max-age={max_age}, stale-while-revalidate={swr}"),
-            (Some(max_age), None) => format!("public, max-age={max_age}"),
-            (None, Some(_)) => "no-cache".to_string(),
+impl StaticRoute {
+    /// Returns true when a file of `len` bytes should be run through the
+    /// optimizer (i.e. is at or below the configured cap). Encapsulates
+    /// the `Some(0) == disabled cap` sentinel.
+    pub fn allows_optimization_at_size(&self, len: usize) -> bool {
+        match self.optimize_max_bytes {
+            Some(0) => true,
+            Some(cap) => len <= cap,
+            None => len <= 2 * 1024 * 1024,
         }
     }
 }
+
+/// Default Cache-Control for optimized responses. Long max-age plus a long
+/// stale-while-revalidate window so Varnish serves stale to clients while
+/// firing a cheap background revalidation through the 304-aware backend.
+pub(crate) const DEFAULT_CACHE_CONTROL: &str =
+    "public, max-age=86400, stale-while-revalidate=604800";
+
+/// Image in-flight fallback header. Hardcoded — anything cacheable would
+/// pin the un-optimized variant at the HTTP layer until the next mtime.
+pub(crate) const FALLBACK_CACHE_CONTROL: &str = "no-cache";
+
+/// Compile a URL template into a regex.
+///
+/// `{name}` placeholders are mapped to named regex captures via `subs`
+/// (escaped form: `\{name\}` → replacement). `[...]` segments become
+/// optional groups via the bracket-rewrite. `required` is the list of
+/// raw placeholders (`{name}`) that must appear in `url`; missing any
+/// produces a parse error. Bracket pairs must balance after the rewrite.
+fn compile_url_template(
+    url: &str,
+    subs: &[(&str, &str)],
+    required: &[&str],
+) -> Result<Regex, Error> {
+    for placeholder in required {
+        if !url.contains(placeholder) {
+            return Error::err(format!(
+                "Argument {} is required in URL pattern",
+                placeholder,
+            ));
+        }
+    }
+    let mut clean = format!(r"^{}$", regex::escape(url));
+    for (from, to) in subs {
+        clean = clean.replace(from, to);
+    }
+    clean = clean.replace(r"\[", "(").replace(r"\]", ")?");
+    if clean.chars().filter(|c| *c == '(').count()
+        != clean.chars().filter(|c| *c == ')').count()
+    {
+        return Error::err("Invalid URL pattern in config file");
+    }
+    Ok(Regex::new(&clean)?)
+}
+
+/// Per-extension toggles. JS minification defaults to FALSE because oxc_minifier
+/// is still alpha and has historically shipped semantically-broken outputs on
+/// edge cases; opt in once you've batch-tested against your asset corpus.
+/// Other optimizers (HTML, CSS, JSON) default ON.
+#[derive(Deserialize, Clone, Debug)]
+pub struct Optimization {
+    #[serde(default = "default_true")] pub html: bool,
+    #[serde(default = "default_true")] pub css: bool,
+    #[serde(default = "default_false")] pub js: bool,
+    #[serde(default = "default_true")] pub json: bool,
+}
+
+impl Default for Optimization {
+    fn default() -> Self {
+        Optimization { html: true, css: true, js: false, json: true }
+    }
+}
+
+fn default_true() -> bool { true }
+fn default_false() -> bool { false }
+
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Size {
@@ -196,30 +282,48 @@ impl Config {
 
         config.quality_serialized = None;
 
-        let cc = config.cache_control.clone().unwrap_or_default();
-        config.cache_control_optimized = cc.optimized_header();
-        config.cache_control_fallback = cc.fallback_header();
+        let global_cc: Arc<str> = match config.cache_control.as_deref() {
+            Some(s) => Arc::from(s),
+            None => Arc::from(DEFAULT_CACHE_CONTROL),
+        };
+        config.cache_control_value = global_cc.clone();
+        config.cache_control_fallback = Arc::from(FALLBACK_CACHE_CONTROL);
+
+        for route in &mut config.statics {
+            route.url_regex = Some(Self::build_static_url_regex(&route.url)?);
+            let canon = std::fs::canonicalize(&route.root)
+                .map_err(|e| Error::new(format!("static root {} unreadable: {}", route.root, e)))?;
+            route.root_canon = Some(canon);
+            //Per-route Cache-Control falls back to the global value when
+            //unset. Stored as Arc<str> so the response path can clone
+            //refcounts instead of allocating.
+            route.cache_control_value = match route.cache_control.as_deref() {
+                Some(s) => Arc::from(s),
+                None => global_cc.clone(),
+            };
+        }
 
         Ok(config)
     }
 
+    fn build_static_url_regex(url: &str) -> Result<Regex, Error> {
+        compile_url_template(
+            url,
+            &[(r"\{path\}", r"(?<path>.+?)")],
+            &["{path}"],
+        )
+    }
+
     fn build_url_regex(url: &str) -> Result<Regex, Error> {
-        if !url.contains("{size}") || !url.contains("{path}") {
-            return Error::err("Arguments {size} and {path} are required in URL pattern");
-        }
-
-        let clean_url = format!(r"^{}$", regex::escape(url))
-            .replace(r"\{size\}", r"(?<size>\w+)")
-            .replace(r"\{path\}", r"(?<path>.+?)")
-            .replace(r"\{ext\}", r"(?<ext>[a-zA-Z0-9]+)")
-            .replace(r"\[", "(")
-            .replace(r"\]", ")?");
-
-        if clean_url.chars().filter(|c| *c == '(').count() != clean_url.chars().filter(|c| *c == ')').count() {
-            return Error::err("Invalid URL pattern in config file");
-        }
-
-        Ok(Regex::new(&clean_url)?)
+        compile_url_template(
+            url,
+            &[
+                (r"\{size\}", r"(?<size>\w+)"),
+                (r"\{path\}", r"(?<path>.+?)"),
+                (r"\{ext\}", r"(?<ext>[a-zA-Z0-9]+)"),
+            ],
+            &["{size}", "{path}"],
+        )
     }
 }
 
@@ -248,9 +352,10 @@ impl Default for Config {
             logger: None,
             cache_control: None,
             url_regex: None,
-            cache_control_optimized: String::new(),
-            cache_control_fallback: String::new(),
+            cache_control_value: Arc::from(""),
+            cache_control_fallback: Arc::from(""),
             quality_serialized: None,
+            statics: Vec::new(),
         }
     }
 }
@@ -289,6 +394,7 @@ impl OptimizationConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_parse_valid_config() {
@@ -475,12 +581,160 @@ mod tests {
         )
         "#);
         let config = Config::parse(config_content).expect("config should parse");
-        assert_eq!(config.cache_control_optimized, "public, max-age=86400, stale-while-revalidate=604800");
-        assert_eq!(config.cache_control_fallback, "no-cache");
+        assert_eq!(&*config.cache_control_value, DEFAULT_CACHE_CONTROL);
+        assert_eq!(&*config.cache_control_fallback, FALLBACK_CACHE_CONTROL);
     }
 
     #[test]
-    fn test_parse_cache_control_overrides() {
+    fn test_parse_static_routes_with_defaults() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        let config_content = format!(r#"
+        (
+            extensions: [AVIF],
+            default_format: JPEG,
+            roots: ["/build/media"],
+            url: "/media/{{size}}/{{path}}.{{ext}}",
+            cache_directory: "/build/cache",
+            sizes: {{ "default": Size(width: 100, height: 100) }},
+            static: [
+                StaticRoute(
+                    url: "/assets/{{path}}",
+                    root: "{root}",
+                ),
+            ],
+        )
+        "#);
+        let config = Config::parse(config_content).expect("parse");
+        assert_eq!(config.statics.len(), 1);
+        assert_eq!(config.statics[0].url, "/assets/{path}");
+        assert!(config.statics[0].url_regex.is_some());
+        assert!(config.statics[0].root_canon.is_some());
+        assert!(config.statics[0].optimization.html);
+        assert!(config.statics[0].optimization.css);
+        assert!(!config.statics[0].optimization.js, "js should default OFF (alpha)");
+        assert!(config.statics[0].optimization.json);
+        //2 MiB default cap: small file → optimization allowed
+        assert!(config.statics[0].allows_optimization_at_size(1_000_000));
+        assert!(!config.statics[0].allows_optimization_at_size(3 * 1024 * 1024));
+        //per-route Cache-Control falls back to global default
+        assert_eq!(&*config.statics[0].cache_control_value, DEFAULT_CACHE_CONTROL);
+    }
+
+    #[test]
+    fn test_parse_static_route_optimization_overrides() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        let config_content = format!(r#"
+        (
+            extensions: [AVIF],
+            default_format: JPEG,
+            roots: ["/build/media"],
+            url: "/media/{{size}}/{{path}}.{{ext}}",
+            cache_directory: "/build/cache",
+            sizes: {{ "default": Size(width: 100, height: 100) }},
+            static: [
+                StaticRoute(
+                    url: "/assets/{{path}}",
+                    root: "{root}",
+                    optimization: Optimization(js: true, css: false),
+                    optimize_max_bytes: 1024,
+                ),
+            ],
+        )
+        "#);
+        let config = Config::parse(config_content).expect("parse");
+        assert!(config.statics[0].optimization.js);
+        assert!(!config.statics[0].optimization.css);
+        assert!(config.statics[0].optimization.html, "html unchanged from default");
+        assert!(config.statics[0].allows_optimization_at_size(1024));
+        assert!(!config.statics[0].allows_optimization_at_size(1025));
+    }
+
+    #[test]
+    fn test_optimize_max_bytes_zero_disables_cap() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        let config_content = format!(r#"
+        (
+            extensions: [AVIF],
+            default_format: JPEG,
+            roots: ["/build/media"],
+            url: "/media/{{size}}/{{path}}.{{ext}}",
+            cache_directory: "/build/cache",
+            sizes: {{ "default": Size(width: 100, height: 100) }},
+            static: [
+                StaticRoute(
+                    url: "/assets/{{path}}",
+                    root: "{root}",
+                    optimize_max_bytes: 0,
+                ),
+            ],
+        )
+        "#);
+        let config = Config::parse(config_content).expect("parse");
+        //Some(0) sentinel means "no cap" — files of any size are optimized
+        assert!(config.statics[0].allows_optimization_at_size(0));
+        assert!(config.statics[0].allows_optimization_at_size(usize::MAX));
+    }
+
+    #[test]
+    fn test_parse_static_route_per_route_cache_control() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        let config_content = format!(r#"
+        (
+            extensions: [AVIF],
+            default_format: JPEG,
+            roots: ["/build/media"],
+            url: "/media/{{size}}/{{path}}.{{ext}}",
+            cache_directory: "/build/cache",
+            sizes: {{ "default": Size(width: 100, height: 100) }},
+            static: [
+                StaticRoute(
+                    url: "/assets/{{path}}",
+                    root: "{root}",
+                    cache_control: "public, max-age=60, immutable",
+                ),
+            ],
+        )
+        "#);
+        let config = Config::parse(config_content).expect("parse");
+        assert_eq!(
+            &*config.statics[0].cache_control_value,
+            "public, max-age=60, immutable",
+        );
+    }
+
+    #[test]
+    fn test_parse_static_route_inherits_global_cache_control() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        let config_content = format!(r#"
+        (
+            extensions: [AVIF],
+            default_format: JPEG,
+            roots: ["/build/media"],
+            url: "/media/{{size}}/{{path}}.{{ext}}",
+            cache_directory: "/build/cache",
+            sizes: {{ "default": Size(width: 100, height: 100) }},
+            cache_control: "public, max-age=3600",
+            static: [
+                StaticRoute(
+                    url: "/assets/{{path}}",
+                    root: "{root}",
+                ),
+            ],
+        )
+        "#);
+        let config = Config::parse(config_content).expect("parse");
+        //route without its own cache_control inherits the global one
+        assert_eq!(&*config.cache_control_value, "public, max-age=3600");
+        assert_eq!(&*config.statics[0].cache_control_value, "public, max-age=3600");
+    }
+
+    #[test]
+    fn test_parse_static_route_unreadable_root_fails() {
         let config_content = String::from(r#"
         (
             extensions: [AVIF],
@@ -489,17 +743,42 @@ mod tests {
             url: "/media/{size}/{path}.{ext}",
             cache_directory: "/build/cache",
             sizes: { "default": Size(width: 100, height: 100) },
-            cache_control: CacheControl(
-                optimized_max_age_seconds: 3600,
-                optimized_stale_while_revalidate_seconds: 86400,
-                fallback_max_age_seconds: 30,
-                fallback_stale_while_revalidate_seconds: 600,
-            ),
+            static: [
+                StaticRoute(
+                    url: "/assets/{path}",
+                    root: "/this/path/does/not/exist/anywhere",
+                ),
+            ],
+        )
+        "#);
+        let result = Config::parse(config_content);
+        assert!(result.is_err(), "parse should fail when static root is unreadable");
+    }
+
+    #[test]
+    fn test_parse_static_url_requires_path_capture() {
+        let result = Config::build_static_url_regex("/assets/foo");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_cache_control_override() {
+        //user-supplied raw header replaces the default; image fallback stays
+        //hardcoded "no-cache" regardless
+        let config_content = String::from(r#"
+        (
+            extensions: [AVIF],
+            default_format: JPEG,
+            roots: ["/build/media"],
+            url: "/media/{size}/{path}.{ext}",
+            cache_directory: "/build/cache",
+            sizes: { "default": Size(width: 100, height: 100) },
+            cache_control: "private, max-age=300",
         )
         "#);
         let config = Config::parse(config_content).expect("config should parse");
-        assert_eq!(config.cache_control_optimized, "public, max-age=3600, stale-while-revalidate=86400");
-        assert_eq!(config.cache_control_fallback, "public, max-age=30, stale-while-revalidate=600");
+        assert_eq!(&*config.cache_control_value, "private, max-age=300");
+        assert_eq!(&*config.cache_control_fallback, FALLBACK_CACHE_CONTROL);
     }
 
 }

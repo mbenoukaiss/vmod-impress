@@ -78,7 +78,9 @@ impl<T> From<SendError<T>> for Error {
 
 error_from!(Error::Other, bx ron::error::SpannedError);
 error_from!(Error::Other, bx std::string::FromUtf8Error);
+error_from!(Error::Other, bx std::str::Utf8Error);
 error_from!(Error::Other, bx regex::Error);
+error_from!(Error::Other, bx serde_json::Error);
 error_from!(Error::Other, bx libavif::Error);
 error_from!(Error::Other, bx turbojpeg::Error);
 error_from!(Error::Other, bx image::ImageError);

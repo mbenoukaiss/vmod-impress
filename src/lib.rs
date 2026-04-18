@@ -9,6 +9,7 @@ mod cache;
 mod config;
 mod images;
 mod error;
+mod static_files;
 mod utils;
 
 use log4rs::append::file::FileAppender;
@@ -17,12 +18,13 @@ use log4rs::encode::pattern::PatternEncoder;
 use log::LevelFilter;
 use varnish::vcl::Backend;
 use crate::error::Error;
-use crate::backend::{FileBackend, FileTransfer};
+use crate::backend::FileBackend;
 use crate::config::Logger as LoggerConfig;
+use crate::static_files::Transfer;
 
 #[allow(non_camel_case_types)]
 struct new {
-    backend: Backend<FileBackend, FileTransfer>,
+    backend: Backend<FileBackend, Transfer>,
 }
 
 #[varnish::vmod]

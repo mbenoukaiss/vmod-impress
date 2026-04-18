@@ -7,6 +7,7 @@ use varnish::vcl::{Ctx, HttpHeaders, StrOrBytes, VclBackend, VclError, VclRespon
 use crate::cache::Cache;
 use crate::config::SharedConfig;
 use crate::error::Error;
+use crate::static_files::Transfer;
 
 fn utf8_header(h: Option<StrOrBytes<'_>>) -> Option<&str> {
     match h {
@@ -37,7 +38,7 @@ enum ResponseShape {
 }
 
 impl FileBackend {
-    fn get_data(&self, ctx: &mut Ctx) -> Result<Option<FileTransfer>, Error> {
+    fn get_data(&self, ctx: &mut Ctx) -> Result<Option<Transfer>, Error> {
         //hold bereq's borrow for the whole read-side of the request so we
         //don't allocate a String for every header value just to outlive
         //the borrow. shape is computed inside the same scope while the
@@ -55,12 +56,26 @@ impl FileBackend {
             //actually contains percent-encodings
             let url = urlencoding::decode(url_raw)?;
 
-            let pattern = self.config.url_regex.as_ref().expect("Badly initialized config");
-            let result = match pattern.captures(&url) {
-                Some(captures) if self.config.sizes.get(&captures["size"]).map_or(false, |p| p.matches(&captures["path"])) => {
-                    self.cache.get(&captures["path"], &captures["size"], accept)?
+            //Routes evaluate top-down: every configured static route is tried
+            //before the image route. Once a static route's URL pattern
+            //matches, that route owns the response — even if the file is
+            //missing (404) or fails the path-traversal guard. We don't fall
+            //through to the image regex.
+            let result = 'dispatch: {
+                for (route_id, route) in self.config.statics.iter().enumerate() {
+                    let regex = route.url_regex.as_ref().expect("Badly initialized static route");
+                    if let Some(captures) = regex.captures(&url) {
+                        let rel_path = &captures["path"];
+                        break 'dispatch crate::static_files::serve(&self.config, route_id, rel_path)?;
+                    }
                 }
-                _ => None,
+                let pattern = self.config.url_regex.as_ref().expect("Badly initialized config");
+                match pattern.captures(&url) {
+                    Some(captures) if self.config.sizes.get(&captures["size"]).map_or(false, |p| p.matches(&captures["path"])) => {
+                        self.cache.get(&captures["path"], &captures["size"], accept)?
+                    }
+                    _ => None,
+                }
             };
 
             let shape = result.as_ref().map(|r| decide_response_shape(
@@ -86,15 +101,16 @@ impl FileBackend {
         //result was Some so shape was computed
         let shape = shape.expect("shape must be Some when result is Some");
 
+        //Cache-Control is pre-picked by whoever produced the FetchResult so
+        //the response path doesn't have to branch. For images this is
+        //optimized vs fallback (in-flight optimization). For static routes
+        //it's the per-route optimized header — there's no in-flight notion.
+        //
         //serve stale-while-revalidate: Varnish reads stale-while-revalidate=N
         //from beresp.Cache-Control and uses it as beresp.grace, so it serves
         //stale to clients while firing a cheap background revalidation through
-        //our 304-aware backend. The previous "immutable" suppressed that.
-        let cache_control: &str = if result.is_optimized {
-            &self.config.cache_control_optimized
-        } else {
-            &self.config.cache_control_fallback
-        };
+        //our 304-aware backend.
+        let cache_control: &str = &result.cache_control;
 
         match shape {
             ResponseShape::NotAllowed => {
@@ -129,8 +145,8 @@ impl FileBackend {
     }
 }
 
-impl VclBackend<FileTransfer> for FileBackend {
-    fn get_response(&self, ctx: &mut Ctx) -> Result<Option<FileTransfer>, VclError> {
+impl VclBackend<Transfer> for FileBackend {
+    fn get_response(&self, ctx: &mut Ctx) -> Result<Option<Transfer>, VclError> {
         match self.get_data(ctx) {
             Ok(transfer) => Ok(transfer),
             Err(e) if is_not_found(&e) => {

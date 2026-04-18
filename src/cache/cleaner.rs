@@ -150,9 +150,10 @@ mod tests {
             logger: None,
             cache_control: None,
             url_regex: None,
-            cache_control_optimized: String::new(),
-            cache_control_fallback: String::new(),
+            cache_control_value: Arc::from(""),
+            cache_control_fallback: Arc::from(""),
             quality_serialized: None,
+            statics: Vec::new(),
         }
     }
 

@@ -10,12 +10,6 @@ Config(
         "high": Size(width: 1200, height: 1200),
         "product": Size(width: 546, height: 302, pattern: "^products/", pre_optimize: true),
     },
-    cache_control: CacheControl(
-        optimized_max_age_seconds: 86400,
-        optimized_stale_while_revalidate_seconds: 604800,
-        fallback_max_age_seconds: 60,
-        fallback_stale_while_revalidate_seconds: 3600,
-    ),
     logger: Logger(
         path: "/build/debug/impress.log",
         level: WARN

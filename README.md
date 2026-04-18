@@ -1,9 +1,13 @@
 # Impress
 A Varnish module that resizes, compresses and converts images on the fly to
-the best format the requesting client supports (AVIF, WebP, JPEG). Optimized
-variants are written to a local cache directory and served with proper HTTP
-cache validators (`ETag`, `Last-Modified`, `stale-while-revalidate`) so
-Varnish itself can revalidate cheaply.
+the best format the requesting client supports (AVIF, WebP, JPEG), and that
+also serves general static files (HTML, CSS, JS, JSON, fonts, raw images,
+…) with per-extension in-process minification on cache miss. Optimized
+image variants are written to a local cache directory; static-file output
+is held in memory only as long as Varnish needs it, then re-derived on the
+next miss. Both paths emit proper HTTP cache validators (`ETag`,
+`Last-Modified`, `stale-while-revalidate`) so Varnish itself can
+revalidate cheaply.
 
 ## Setting up the plugin
 
@@ -48,10 +52,14 @@ Config(
         "high":    Size(width: 1200, height: 1200),
         "product": Size(width: 546,  height: 302, pattern: "^products/", pre_optimize: true),
     },
-    cache_control: CacheControl(
-        optimized_max_age_seconds: 86400,
-        optimized_stale_while_revalidate_seconds: 604800,
-    ),
+    cache_control: "public, max-age=86400, stale-while-revalidate=604800",
+    static: [
+        StaticRoute(
+            url: "/assets/{path}",
+            root: "/var/www/static",
+            optimization: Optimization(js: true),
+        ),
+    ],
     logger: Logger(
         path: "/var/log/impress.log",
         level: WARN,
@@ -73,7 +81,8 @@ Config(
 | `cache_directory` | Directory where optimized variants are written. Layout is `<cache_directory>/<size>/<image_id>.<ext>`. |
 | `pre_optimizer_threads` | Threads in the optimization pool. Default `1`. |
 | `sizes` | Map of named sizes, see below. |
-| `cache_control` | Optional. Tune the `Cache-Control` header sent on responses, see below. |
+| `cache_control` | Optional. Raw `Cache-Control` header value used on optimized image responses and static-file responses. Defaults to `"public, max-age=86400, stale-while-revalidate=604800"`. The image in-flight fallback (raw bytes served while optimization is running) is hardcoded to `"no-cache"` and is not configurable — caching it would pin the un-optimized variant at the HTTP layer until the next mtime. |
+| `static` | Optional. List of `StaticRoute`s for serving general static assets alongside images, see below. |
 | `logger` | Optional file logger. Omit to disable file logging. |
 
 ### URL pattern (`url`)
@@ -118,20 +127,52 @@ been deleted, or that don't fit the current `sizes` / `extensions`
 configuration. There is no LRU or size-cap eviction; the source filesystem
 is the source of truth for what should exist in the cache.
 
-### `CacheControl` (optional)
+### `StaticRoute` (optional, repeatable)
 
-Controls the `Cache-Control` header sent on responses. Defaults are tuned
-for stale-while-revalidate behavior — Varnish reads `stale-while-revalidate=N`
-from the response and uses it as `beresp.grace`, so it serves stale content
-to clients while firing a cheap background revalidation through this VMOD's
-304-aware backend.
+Each entry serves files from `root` under the URL pattern `url`. Routes
+evaluate top-down; the first route whose URL pattern matches owns the
+response — even if the file is missing or the path-traversal guard
+trips, the route does not fall through to a later route or to the image
+regex. Place narrow routes before broad ones.
 
-| Field | Default | Description |
+| Field | Description |
+|---|---|
+| `url` | URL pattern. Must contain `{path}`. `[...]` brackets denote optional segments. Example: `/assets/{path}`. |
+| `root` | Filesystem root the route serves from. Canonicalized once at parse time. Requests are joined under this root and rejected if the resolved path escapes (parent-dir, absolute, or symlink to outside-root). |
+| `cache_control` | Optional raw `Cache-Control` header value. Falls back to `Config.cache_control` when unset. |
+| `optimization` | Optional. Per-extension toggles, see below. |
+| `optimize_max_bytes` | Optional. Files larger than this skip optimization and stream from disk regardless of toggles — keeps a single big file from OOMing a worker. Default `2_097_152` (2 MiB). `Some(0)` removes the cap. |
+
+#### `Optimization`
+
+Per-extension toggles. Defaults run minify-html, lightningcss, serde_json
+on HTML / CSS / JSON. JS minification (`oxc_minifier`) defaults **off**
+because that crate is alpha and has shipped semantically-broken outputs
+on edge cases — opt in only after batch-testing against your asset corpus.
+
+| Field | Default | Optimizer used |
 |---|---|---|
-| `optimized_max_age_seconds` | `86400` | `max-age` on optimized variants (cache hits) |
-| `optimized_stale_while_revalidate_seconds` | `604800` | `stale-while-revalidate` window on optimized variants |
-| `fallback_max_age_seconds` | `60` | `max-age` on the un-optimized fallback (returned while a job is in-flight) |
-| `fallback_stale_while_revalidate_seconds` | `3600` | `stale-while-revalidate` on the fallback |
+| `html` | `true` | minify-html (also runs lightningcss / oxc on inline `<style>` / `<script>`) |
+| `css` | `true` | lightningcss |
+| `js` | `false` | oxc_minifier (alpha — opt in deliberately) |
+| `json` | `true` | serde_json (parse + compact-serialize) |
+
+SVG is served unoptimized — `oxvg_optimiser` pins a `lightningcss` feature
+that conflicts with the version `minify-html` requires, so the two crates
+can't coexist in this dep graph.
+
+When optimization runs, output bytes ship via an in-memory `MemoryTransfer`.
+On no-improvement (output not strictly smaller than the input) we still
+ship the in-heap bytes rather than re-opening the file — that avoids the
+read-after-rename TOCTOU window. Files past `optimize_max_bytes` and files
+with optimization toggled off stream directly from disk via `FileTransfer`.
+
+ETag for static responses is hashed from
+`(inode, body_len, mtime_secs, mime, is_optimized, STATIC_OPTIMIZER_VERSION)`.
+The version constant is bumped manually after a minifier crate upgrade
+that changes output bytes for unchanged sources, so clients holding an
+old `If-None-Match` get a real 200 with the new bytes rather than a stale
+304.
 
 ### `Logger` (optional)
 
@@ -159,32 +200,6 @@ layers, no periodic disk-walking required:
    an `ETag` from `(inode, size, mtime, is_optimized)` and returns 304 if
    the disk is unchanged or 200 with the new bytes if the watcher updated
    the file.
-
-For explicit invalidation (e.g. after a bulk source upload that you don't
-want to wait `max-age` for), wire a VCL `BAN` handler:
-
-```vcl
-import std;
-
-acl purge {
-    "localhost";
-    "127.0.0.1";
-}
-
-sub vcl_recv {
-    if (req.method == "BAN") {
-        if (!client.ip ~ purge) {
-            return (synth(403, "Forbidden"));
-        }
-        if (!std.ban("req.url ~ " + req.url)) {
-            return (synth(400, std.ban_error()));
-        }
-        return (synth(200, "Ban added"));
-    }
-}
-```
-
-This is purely Varnish configuration; the VMOD doesn't need code for it.
 
 ## Running the project
 
