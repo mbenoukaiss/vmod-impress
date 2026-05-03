@@ -71,7 +71,7 @@ impl FileBackend {
                 }
                 let pattern = self.config.url_regex.as_ref().expect("Badly initialized config");
                 match pattern.captures(&url) {
-                    Some(captures) if self.config.sizes.get(&captures["size"]).map_or(false, |p| p.matches(&captures["path"])) => {
+                    Some(captures) if self.config.sizes.get(&captures["size"]).is_some_and(|p| p.matches(&captures["path"])) => {
                         self.cache.get(&captures["path"], &captures["size"], accept)?
                     }
                     _ => None,

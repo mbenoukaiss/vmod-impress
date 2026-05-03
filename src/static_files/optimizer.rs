@@ -1,31 +1,55 @@
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
 use crate::error::Error;
 
+/// Run `f` with a panic catcher around it. minify-html, oxc_minifier (alpha),
+/// lightningcss, and serde_json can all panic on pathological input. The
+/// `varnish::vmod` macro doesn't catch_unwind across the FFI boundary
+/// (Cargo.toml documents this), so an uncaught panic in either the static-file
+/// hot path or the VFP would abort varnishd. We convert panics to `Err` so
+/// `dispatch_by_ext`'s existing fall-through-to-input branch handles them
+/// the same way as ordinary parse errors.
+fn run_safely<F: FnOnce() -> Result<Vec<u8>, Error>>(name: &str, f: F) -> Result<Vec<u8>, Error> {
+    //AssertUnwindSafe: closures over `&[u8]` are unwind-safe by construction;
+    //the assertion is needed because `dyn FnOnce` is conservative about it.
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(_) => Err(Error::new(format!("{name} panicked"))),
+    }
+}
+
 pub fn optimize_json(input: &[u8]) -> Result<Vec<u8>, Error> {
-    let v: serde_json::Value = serde_json::from_slice(input)?;
-    Ok(serde_json::to_vec(&v)?)
+    run_safely("optimize_json", || {
+        let v: serde_json::Value = serde_json::from_slice(input)?;
+        Ok(serde_json::to_vec(&v)?)
+    })
 }
 
 pub fn optimize_css(input: &[u8]) -> Result<Vec<u8>, Error> {
     use lightningcss::printer::PrinterOptions;
     use lightningcss::stylesheet::{MinifyOptions, ParserOptions, StyleSheet};
 
-    let s = std::str::from_utf8(input)?;
-    let mut sheet = StyleSheet::parse(s, ParserOptions::default())
-        .map_err(|e| Error::new(format!("css parse: {e:?}")))?;
-    sheet.minify(MinifyOptions::default())
-        .map_err(|e| Error::new(format!("css minify: {e:?}")))?;
-    let result = sheet.to_css(PrinterOptions { minify: true, ..Default::default() })
-        .map_err(|e| Error::new(format!("css print: {e:?}")))?;
-    Ok(result.code.into_bytes())
+    run_safely("optimize_css", || {
+        let s = std::str::from_utf8(input)?;
+        let mut sheet = StyleSheet::parse(s, ParserOptions::default())
+            .map_err(|e| Error::new(format!("css parse: {e:?}")))?;
+        sheet.minify(MinifyOptions::default())
+            .map_err(|e| Error::new(format!("css minify: {e:?}")))?;
+        let result = sheet.to_css(PrinterOptions { minify: true, ..Default::default() })
+            .map_err(|e| Error::new(format!("css print: {e:?}")))?;
+        Ok(result.code.into_bytes())
+    })
 }
 
 pub fn optimize_html(input: &[u8]) -> Result<Vec<u8>, Error> {
-    let cfg = minify_html::Cfg {
-        minify_css: true,
-        minify_js: true,
-        ..Default::default()
-    };
-    Ok(minify_html::minify(input, &cfg))
+    run_safely("optimize_html", || {
+        let cfg = minify_html::Cfg {
+            minify_css: true,
+            minify_js: true,
+            ..Default::default()
+        };
+        Ok(minify_html::minify(input, &cfg))
+    })
 }
 
 pub fn optimize_js(input: &[u8]) -> Result<Vec<u8>, Error> {
@@ -35,20 +59,22 @@ pub fn optimize_js(input: &[u8]) -> Result<Vec<u8>, Error> {
     use oxc_parser::Parser;
     use oxc_span::SourceType;
 
-    let allocator = Allocator::default();
-    let source = std::str::from_utf8(input)?;
-    //unambiguous handles both .js (script) and .mjs (module) sources without
-    //pre-classification — let the parser figure it out from the source itself
-    let parsed = Parser::new(&allocator, source, SourceType::unambiguous()).parse();
-    if !parsed.errors.is_empty() {
-        return Err(Error::new(format!("js parse: {} error(s)", parsed.errors.len())));
-    }
-    let mut program = parsed.program;
-    let _ = Minifier::new(MinifierOptions::default()).minify(&allocator, &mut program);
-    let result = Codegen::new()
-        .with_options(CodegenOptions { minify: true, ..CodegenOptions::default() })
-        .build(&program);
-    Ok(result.code.into_bytes())
+    run_safely("optimize_js", || {
+        let allocator = Allocator::default();
+        let source = std::str::from_utf8(input)?;
+        //unambiguous handles both .js (script) and .mjs (module) sources without
+        //pre-classification — let the parser figure it out from the source itself
+        let parsed = Parser::new(&allocator, source, SourceType::unambiguous()).parse();
+        if !parsed.errors.is_empty() {
+            return Err(Error::new(format!("js parse: {} error(s)", parsed.errors.len())));
+        }
+        let mut program = parsed.program;
+        let _ = Minifier::new(MinifierOptions::default()).minify(&allocator, &mut program);
+        let result = Codegen::new()
+            .with_options(CodegenOptions { minify: true, ..CodegenOptions::default() })
+            .build(&program);
+        Ok(result.code.into_bytes())
+    })
 }
 
 /// Universal size-guard: always Ok; if optimization errored or output ≥ input,
@@ -87,6 +113,17 @@ mod tests {
         }"#;
         let out = dispatch_by_ext(input, "json").unwrap();
         assert_eq!(std::str::from_utf8(&out).unwrap(), r#"{"a":1,"b":[1,2,3]}"#);
+    }
+
+    #[test]
+    fn json_preserves_key_order() {
+        //Regression: without `serde_json/preserve_order`, Value defaults to
+        //BTreeMap and silently sorts keys alphabetically — the bytes change
+        //in ways that break JWS / canonical-JSON / content-hash consumers.
+        //We need source order out the other side.
+        let input = br#"{"z":1,"a":2,"m":3}"#;
+        let out = dispatch_by_ext(input, "json").unwrap();
+        assert_eq!(std::str::from_utf8(&out).unwrap(), r#"{"z":1,"a":2,"m":3}"#);
     }
 
     #[test]
@@ -162,5 +199,31 @@ mod tests {
         for ext in ["png", "txt", "svg", "woff2", ""] {
             assert!(!applies_to_ext(ext), "expected NOT applies for {ext}");
         }
+    }
+
+    #[test]
+    fn run_safely_catches_panic() {
+        //Critical FFI invariant: the varnish vmod macro doesn't catch_unwind,
+        //so any panic in an optimizer would abort varnishd. run_safely converts
+        //panics to ordinary Err values so dispatch_by_ext falls through to the
+        //input bytes the same way it does for any parse error.
+        let r: Result<Vec<u8>, Error> = run_safely("test", || {
+            panic!("boom");
+        });
+        assert!(r.is_err());
+        assert!(r.unwrap_err().to_string().contains("panicked"));
+    }
+
+    #[test]
+    fn run_safely_passes_through_ok() {
+        let r = run_safely("test", || Ok(b"hello".to_vec())).unwrap();
+        assert_eq!(r, b"hello");
+    }
+
+    #[test]
+    fn run_safely_passes_through_err() {
+        let r: Result<Vec<u8>, Error> = run_safely("test", || Err(Error::new("nope")));
+        assert!(r.is_err());
+        assert_eq!(r.unwrap_err().to_string(), "nope");
     }
 }

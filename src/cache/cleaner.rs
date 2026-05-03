@@ -248,7 +248,10 @@ mod tests {
         // but with no optimized entry for (medium, WEBP).
         let mut map = HashMap::new();
         let mut img = known_image("/dev/null/other/source.jpg"); //different image_id key below
-        img.add("medium".to_string(), Extension::WEBP, tmp.path().join("medium/products/logo.webp"));
+        //add() returns Err if the metadata stat fails, but we only need this
+        //entry as a setup fixture for the orphan-prune test that follows;
+        //either way, the post-sweep assertion is valid.
+        let _ = img.add("medium".to_string(), Extension::WEBP, tmp.path().join("medium/products/logo.webp"));
         map.insert("other-id".to_string(), img); // intentionally mismatched image_id key
         let data: CacheData = Arc::new(RwLock::new(map));
 

@@ -373,6 +373,12 @@ pub struct FetchResult {
     pub etag: Arc<str>,
     pub content_length_str: Arc<str>,
     pub mime: &'static str,
+    /// Whether the body bytes are the result of running an optimizer.
+    /// Consumed only by tests today (production picks Cache-Control via the
+    /// pre-built header below); kept as a field so any future telemetry,
+    /// vary-by-optimization logging, or per-outcome metrics can read it
+    /// without re-deriving from the producer's local state.
+    #[allow(dead_code)]
     pub is_optimized: bool,
     /// Pre-picked Cache-Control header value. The producer of FetchResult
     /// is responsible for choosing optimized vs fallback so the response

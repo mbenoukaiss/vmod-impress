@@ -11,6 +11,7 @@ mod images;
 mod error;
 mod static_files;
 mod utils;
+mod vfp;
 
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, Config as LogConfig, Root};
@@ -31,12 +32,35 @@ struct new {
 mod impress {
     use std::sync::Arc;
     use varnish::ffi::VCL_BACKEND;
-    use varnish::vcl::{Backend, Ctx, VclError};
+    use varnish::vcl::{Backend, Ctx, Event, FetchFilters, VclError};
 
     use super::{new, setup_logging, FileBackend};
     use crate::cache::Cache;
     use crate::config::Config;
+    use crate::vfp::MinifyVfp;
 
+    /// Register/deregister our VFP for the lifetime of each VCL load. Without
+    /// the matching `Discard` arm, repeated VCL reloads would leak the filter
+    /// registration and could double-register on the next load.
+    #[event]
+    pub fn on_event(event: Event, vfp: &mut FetchFilters) -> Result<(), VclError> {
+        match event {
+            Event::Load => {
+                vfp.register::<MinifyVfp>();
+            }
+            Event::Discard => {
+                vfp.unregister::<MinifyVfp>();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    //varnish::vmod's struct-as-class pattern names the constructor after the
+    //type, which trips clippy::self_named_constructors. Documented invariant
+    //of the macro — the VCL surface is `new(...)` and renaming the impl
+    //method would break that.
+    #[allow(clippy::self_named_constructors)]
     impl new {
         pub fn new(
             ctx: &mut Ctx,

@@ -1,0 +1,118 @@
+varnishtest "vmod-impress on-the-fly minifier"
+
+# Bodies are sized > 512 bytes so they clear the MIN_BODY_BYTES admission gate.
+# Backslash-escaped \n is interpreted by varnishtest as a real newline, so
+# minify-html has whitespace to collapse.
+
+server s1 {
+    # /html — plain text/html, exercises the basic minify path.
+    rxreq
+    expect req.url == "/html"
+    txresp -hdr "Content-Type: text/html; charset=utf-8" \
+           -body {<html>
+  <head>
+    <title>hello world hello world</title>
+  </head>
+  <body>
+    <h1>hello world hello world</h1>
+    <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do
+       eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim
+       ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut
+       aliquip ex ea commodo consequat.</p>
+    <p>Duis aute irure dolor in reprehenderit in voluptate velit esse
+       cillum dolore eu fugiat nulla pariatur.</p>
+  </body>
+</html>
+}
+
+    # /image — image/png, must bypass the filter.
+    rxreq
+    expect req.url == "/image"
+    txresp -hdr "Content-Type: image/png" -body "FAKEPNGBYTES"
+
+    # /gzipped — gzipped HTML, exercises the filter-ordering trick
+    # (impress_minify must run BEFORE the trailing gzip filter).
+    rxreq
+    expect req.url == "/gzipped"
+    txresp -hdr "Content-Type: text/html; charset=utf-8" \
+           -gzipbody {<html>
+  <body>
+    <h1>gzipped greetings everyone</h1>
+    <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do
+       eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim
+       ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut
+       aliquip ex ea commodo consequat.</p>
+    <p>Duis aute irure dolor in reprehenderit in voluptate velit esse
+       cillum dolore eu fugiat nulla pariatur.</p>
+  </body>
+</html>
+}
+} -start
+
+varnish v1 -vcl+backend {
+    import impress;
+
+    sub vcl_backend_response {
+        if (beresp.http.content-type ~ "^(text/(html|css|javascript)|application/(json|javascript))") {
+            # If the backend served a gzipped body, force Varnish to gunzip
+            # so our filter sees plaintext (and re-gzip after we've shrunk
+            # the body, for storage and delivery).
+            set beresp.do_gunzip = true;
+            # Insert impress_minify before any trailing gzip filter so we
+            # see plaintext; if no gzip filter is in the chain (uncompressed
+            # backend, http_gzip_support off, etc.) regsuball is a no-op
+            # and we append instead.
+            set beresp.filters = regsuball(beresp.filters, "(^| )gzip( |$)", "\1impress_minify gzip\2");
+            if (beresp.filters !~ "impress_minify") {
+                set beresp.filters = beresp.filters + " impress_minify";
+            }
+        }
+    }
+} -start
+
+# Capture original body length for comparison via a baseline fetch through
+# a non-minifying VCL would be ideal, but the simpler invariant is: body must
+# contain the visible content and must NOT contain the original "\n  "
+# indentation. Both checks together prove the filter ran.
+
+# 1) First request — backend miss, body is minified.
+client c1 {
+    txreq -url "/html"
+    rxresp
+    expect resp.status == 200
+    expect resp.body ~ "<h1>hello world hello world"
+    expect resp.body !~ "\n  "
+} -run
+
+# 2) Second request — cache hit. Asserting on the body (not just the
+#    X-Varnish hit/miss IDs) proves the *minified* bytes are what got
+#    stored. A regression where storage holds the original body would
+#    pass an X-Varnish-only check but fail this one.
+client c2 {
+    txreq -url "/html"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.X-Varnish ~ "[0-9]+ [0-9]+"
+    expect resp.body ~ "<h1>hello world hello world"
+    expect resp.body !~ "\n  "
+} -run
+
+# 3) Image content-type — VCL doesn't attach the filter, body unchanged.
+client c3 {
+    txreq -url "/image"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "FAKEPNGBYTES"
+} -run
+
+# 4) Gzipped backend — client asks for plain delivery, Varnish gunzips
+#    on the way out. This catches the filter-ordering bug: if the filter
+#    were appended after gzip, it would receive gzipped bytes, fail the
+#    UTF-8 check, and the body wouldn't be minified.
+client c4 {
+    txreq -url "/gzipped" -hdr "Accept-Encoding: identity"
+    rxresp
+    expect resp.status == 200
+    expect resp.body ~ "<h1>gzipped greetings everyone"
+    expect resp.body !~ "\n  "
+} -run

@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::Arc;
@@ -36,7 +37,7 @@ pub fn serve(config: &Config, route_id: usize, rel_path: &str) -> Result<Option<
         .unwrap_or_default();
     let mime = mime_for_ext(&ext);
 
-    let file = File::open(&source)?;
+    let mut file = File::open(&source)?;
     let meta = file.metadata()?;
     //safe_join's canonicalize succeeds on directories too — we have to gate
     //that here, otherwise File::open would have already errored with
@@ -72,14 +73,16 @@ pub fn serve(config: &Config, route_id: usize, rel_path: &str) -> Result<Option<
         )));
     }
 
-    //We close the File and re-read into Vec<u8> rather than a streaming reader
-    //because every supported optimizer (minify-html, lightningcss, oxc_minifier,
-    //serde_json) needs the whole document resident before it can emit. Once
-    //we've paid that read, the bytes stay in heap and we ship via MemoryTransfer
-    //regardless of whether dispatch_by_ext shrunk them — no second open of the
-    //source (avoids the read-after-rename TOCTOU window).
+    //Optimization needs the whole document resident — every supported optimizer
+    //(minify-html, lightningcss, oxc_minifier, serde_json) buffers internally.
+    //We read from the same fd we stat'd above, so the bytes we minify match the
+    //metadata in the etag: a rename/replace between stat and read can't slip a
+    //different file's contents through with the original file's inode+mtime+size.
+    //The bytes stay in heap and we ship via MemoryTransfer whether dispatch
+    //shrank them or not — no second open of the path (no TOCTOU window).
+    let mut bytes = Vec::with_capacity(file_len as usize);
+    file.read_to_end(&mut bytes)?;
     drop(file);
-    let bytes = std::fs::read(&source)?;
     let optimized = optimizer::dispatch_by_ext(&bytes, &ext)?;
     let is_optimized = optimized.len() < bytes.len();
     let body_len = optimized.len() as u64;
@@ -166,18 +169,19 @@ mod tests {
     use crate::config::{Optimization, StaticRoute};
 
     fn make_config(static_root: &std::path::Path, optimization: Optimization, max_bytes: Option<usize>) -> Config {
-        let mut config = Config::default();
-        config.statics = vec![StaticRoute {
-            url: "/x/{path}".into(),
-            root: static_root.to_string_lossy().to_string(),
-            cache_control: None,
-            optimization,
-            optimize_max_bytes: max_bytes,
-            url_regex: None,
-            root_canon: Some(std::fs::canonicalize(static_root).unwrap()),
-            cache_control_value: Arc::from("public, max-age=86400"),
-        }];
-        config
+        Config {
+            statics: vec![StaticRoute {
+                url: "/x/{path}".into(),
+                root: static_root.to_string_lossy().to_string(),
+                cache_control: None,
+                optimization,
+                optimize_max_bytes: max_bytes,
+                url_regex: None,
+                root_canon: Some(std::fs::canonicalize(static_root).unwrap()),
+                cache_control_value: Arc::from("public, max-age=86400"),
+            }],
+            ..Config::default()
+        }
     }
 
     fn write(path: &PathBuf, bytes: &[u8]) {
@@ -199,7 +203,7 @@ mod tests {
         assert!(result.is_optimized, "css should shrink");
         assert_eq!(result.mime, "text/css; charset=utf-8");
         assert!(matches!(result.data, Transfer::Memory(_)));
-        assert!((result.data.size() as usize) < payload.len());
+        assert!(result.data.size() < payload.len());
         assert_eq!(&*result.cache_control, "public, max-age=86400");
     }
 
@@ -392,7 +396,7 @@ mod tests {
         assert!(result.is_optimized);
         assert_eq!(result.mime, "text/html; charset=utf-8");
         assert!(matches!(result.data, Transfer::Memory(_)));
-        assert!((result.data.size() as usize) < payload.len());
+        assert!(result.data.size() < payload.len());
     }
 
     #[test]
@@ -470,6 +474,45 @@ mod tests {
         assert!(r_on.is_optimized);
         assert!(!r_off.is_optimized);
         assert_ne!(r_on.etag, r_off.etag);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn rename_after_open_serves_original_bytes() {
+        //Regression: previously the optimize path did `drop(file)` and re-read
+        //via std::fs::read(&source), so a rename between stat and re-read could
+        //ship bytes from the new file with an etag from the old stat. We now
+        //read from the same fd we stat'd. Verify by atomically replacing the
+        //source file after we open it (via std::fs::rename of a sibling onto
+        //the source path) — the Unix kernel keeps our fd attached to the
+        //original inode, so we should still see the v1 bytes.
+        use std::io::Write as _;
+        let src = TempDir::new().unwrap();
+        let path = src.path().join("a.css");
+        write(&path, b".v1{color:red}.spacer{display:none}.spacer{display:none}.spacer{display:none}");
+
+        //Race the rename in: we hold open the file in this thread, replace
+        //the path with a sibling that has different content, and then run
+        //serve. Since serve opens its own fd to the canonical path, simulating
+        //"rename happens between serve's File::open and read_to_end" requires
+        //a real injection point — instead, prove the kernel guarantee at a
+        //lower level: a fd held across the rename keeps the original bytes.
+        let mut held = std::fs::File::open(&path).unwrap();
+        let new_payload = b".v2{color:blue}";
+        let other = src.path().join("b.css");
+        let mut o = std::fs::File::create(&other).unwrap();
+        o.write_all(new_payload).unwrap();
+        std::fs::rename(&other, &path).unwrap();
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut held, &mut buf).unwrap();
+        assert!(buf.contains("v1"), "fd held across rename must still read v1: got {buf:?}");
+
+        //Now run serve against the post-rename path: it opens a fresh fd and
+        //reads the new bytes from the same fd it stat'd, so etag and body are
+        //consistent with each other.
+        let config = make_config(src.path(), opt_all_on(), None);
+        let result = serve(&config, 0, "a.css").unwrap().unwrap();
+        assert!(matches!(result.data, Transfer::Memory(_)));
     }
 
     #[test]

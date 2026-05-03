@@ -181,6 +181,40 @@ old `If-None-Match` get a real 200 with the new bytes rather than a stale
 | `path` | Log file path. |
 | `level` | Minimum level of log; entries below are dropped. Default `INFO`. |
 
+## On-the-fly minifier (`impress_minify`)
+
+The VMOD registers a Varnish Fetch Processor named `impress_minify` that
+buffers a backend response, minifies it, and stores the minified bytes in
+the cache. Subsequent cache hits don't run the filter.
+
+Wire it up in `vcl_backend_response`:
+
+```vcl
+import impress;
+
+sub vcl_backend_response {
+    if (beresp.http.content-type ~ "^(text/(html|css|javascript)|application/(json|javascript))") {
+        # Gunzip the backend body so the minifier sees plaintext; Varnish
+        # re-gzips on the way to storage/clients.
+        set beresp.do_gunzip = true;
+        # Insert impress_minify *before* the trailing gzip filter — appending
+        # would feed gzipped bytes into the minifier and silently no-op.
+        set beresp.filters = regsuball(beresp.filters, "(^| )gzip( |$)", "\1impress_minify gzip\2");
+        if (beresp.filters !~ "impress_minify") {
+            set beresp.filters = beresp.filters + " impress_minify";
+        }
+    }
+}
+```
+
+Supported types: `text/html`, `text/css`, `text/javascript`,
+`application/javascript`, `application/json`.
+
+The filter only engages on cacheable responses. First request to a fresh
+URL pays a TTFB hit equal to the backend response time plus a few ms of
+minify; cache hits are unaffected. Pair with
+`Cache-Control: stale-while-revalidate=N` to amortize refreshes.
+
 ## Cache freshness model
 
 The on-disk optimized cache is kept in sync with the source images via three

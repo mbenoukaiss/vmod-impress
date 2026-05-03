@@ -28,7 +28,10 @@ urlencoding = "2.1"
 headers-accept = "0.3"
 mediatype = "0.21"
 parking_lot = "0.12"
-serde_json = "1.0.149"
+#preserve_order keeps optimize_json's output keys in source order. Without
+#it, serde_json::Value uses BTreeMap and silently sorts keys alphabetically,
+#which breaks JWS, canonical-JSON, and any consumer hashing the bytes.
+serde_json = { version = "1.0.149", features = ["preserve_order"] }
 oxc_minifier = "0.129.0"
 oxc_allocator = "0.129.0"
 oxc_parser = "0.129.0"

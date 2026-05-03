@@ -13,6 +13,9 @@ impl MemoryTransfer {
         MemoryTransfer { cursor: Cursor::new(bytes), total }
     }
 
+    //size() is only consumed in tests; production code reaches the byte count
+    //via the pre-built `content_length_str` on FetchResult or via VclResponse::len.
+    #[cfg(test)]
     pub fn size(&self) -> usize {
         self.total
     }
@@ -34,6 +37,8 @@ pub enum Transfer {
 }
 
 impl Transfer {
+    //test-only helper, see MemoryTransfer::size
+    #[cfg(test)]
     pub fn size(&self) -> usize {
         match self {
             Transfer::File(f) => f.size(),

@@ -37,7 +37,7 @@ pub fn spawn(config: SharedConfig, data: CacheData, in_flight: InFlight, rx: Rec
                 let key = (job.image_id.clone(), job.size.clone());
                 let image_id = job.image_id.clone();
                 if let Err(error) = run_job(task_config, task_data, job) {
-                    error!("Failed to save optimized images {}: {}", image_id, error.to_string());
+                    error!("Failed to save optimized images {}: {}", image_id, error);
                 }
                 //always release in_flight, success or failure — otherwise a
                 //permanently-failing image would block future retries
