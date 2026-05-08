@@ -1,0 +1,17 @@
+{
+    "extensions": ["AVIF", "WEBP", "JPEG"],
+    "default_format": "JPEG",
+    "roots": ["/build/media"],
+    "url": "/media/{size}/{path}[.{ext}]",
+    "cache_directory": "/build/cache",
+    "sizes": {
+        "low":     {"width": 300,  "height": 300},
+        "medium":  {"width": 600,  "height": 600},
+        "high":    {"width": 1200, "height": 1200},
+        "product": {"width": 546,  "height": 302, "pattern": "^products/", "pre_optimize": true}
+    },
+    "logger": {
+        "path": "/build/debug/impress.log",
+        "level": "WARN"
+    }
+}

@@ -242,27 +242,53 @@ impl Extension {
 }
 
 impl Config {
-    pub fn open(path: Option<&str>) -> Result<Config, Error> {
-        let path = path.unwrap_or("impress.ron").to_owned();
+    pub fn open(path: &str) -> Result<Config, Error> {
+        let raw = fs::read_to_string(path)
+            .map_err(|_| Error::new(format!("Unable to read config file {}", path)))?;
 
-        if let Ok(config) = fs::read_to_string(&path) {
-            Config::parse(config)
-        } else {
-            Error::err(format!("Unable to read config file {}", path))
+        match std::path::Path::new(path)
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("json") => Self::parse_json(raw),
+            Some("ron") => Self::parse_ron(raw),
+            Some(other) => Error::err(format!(
+                "Unsupported config extension `.{other}` (use `.json` or `.ron`)",
+            )),
+            None => Error::err(format!(
+                "Config path `{path}` has no extension; use `.json` or `.ron`",
+            )),
         }
     }
 
-    fn parse(config: String) -> Result<Config, Error> {
+    pub fn parse_ron(config: String) -> Result<Config, Error> {
         let mut config = Options::default()
             .with_default_extension(Extensions::IMPLICIT_SOME)
             .from_str::<Config>(&config)?;
+        config.finalize()?;
+        Ok(config)
+    }
 
-        config.url_regex = Some(Self::build_url_regex(&config.url)?);
+    pub fn parse_json(config: String) -> Result<Config, Error> {
+        let mut config: Config = serde_json::from_str(&config)?;
+        config.finalize()?;
+        Ok(config)
+    }
 
-        for size in &mut config.sizes.values_mut() {
+    /// Format-agnostic post-deserialization fixups: compile the URL regex,
+    /// resolve per-size quality matrices from size→global→default, wrap
+    /// cache-control strings in `Arc<str>`, and canonicalize static-route
+    /// roots. Called by both `parse_ron` / `parse_json` and the VCL builder
+    /// after assembling a `Config` directly.
+    pub fn finalize(&mut self) -> Result<(), Error> {
+        self.url_regex = Some(Self::build_url_regex(&self.url)?);
+
+        for size in &mut self.sizes.values_mut() {
             for extension in Extension::values() {
                 let size_quality = size.quality_serialized.as_ref().and_then(|q| q.get(&extension));
-                let config_quality = config.quality_serialized.as_ref().and_then(|q| q.get(&extension));
+                let config_quality = self.quality_serialized.as_ref().and_then(|q| q.get(&extension));
 
                 size.quality[extension as usize] = if let Some(quality) = size_quality {
                     *quality
@@ -280,16 +306,16 @@ impl Config {
             }
         }
 
-        config.quality_serialized = None;
+        self.quality_serialized = None;
 
-        let global_cc: Arc<str> = match config.cache_control.as_deref() {
+        let global_cc: Arc<str> = match self.cache_control.as_deref() {
             Some(s) => Arc::from(s),
             None => Arc::from(DEFAULT_CACHE_CONTROL),
         };
-        config.cache_control_value = global_cc.clone();
-        config.cache_control_fallback = Arc::from(FALLBACK_CACHE_CONTROL);
+        self.cache_control_value = global_cc.clone();
+        self.cache_control_fallback = Arc::from(FALLBACK_CACHE_CONTROL);
 
-        for route in &mut config.statics {
+        for route in &mut self.statics {
             route.url_regex = Some(Self::build_static_url_regex(&route.url)?);
             let canon = std::fs::canonicalize(&route.root)
                 .map_err(|e| Error::new(format!("static root {} unreadable: {}", route.root, e)))?;
@@ -303,7 +329,7 @@ impl Config {
             };
         }
 
-        Ok(config)
+        Ok(())
     }
 
     fn build_static_url_regex(url: &str) -> Result<Regex, Error> {
@@ -418,7 +444,7 @@ mod tests {
         )
         "#);
 
-        let config = Config::parse(config_content).expect("Failed to parse valid config");
+        let config = Config::parse_ron(config_content).expect("Failed to parse valid config");
 
         assert_eq!(config.extensions, vec![Extension::AVIF, Extension::WEBP, Extension::JPEG]);
         assert_eq!(config.default_format, Extension::JPEG);
@@ -455,7 +481,7 @@ mod tests {
         )
         "#);
 
-        let result = Config::parse(config_content);
+        let result = Config::parse_ron(config_content);
         assert!(result.is_err());
         if let Err(err) = result {
             assert_eq!(err.to_string(), "Invalid URL pattern in config file".to_string());
@@ -484,7 +510,7 @@ mod tests {
         )
         "#);
 
-        let config = Config::parse(config_content).expect("Failed to parse valid config");
+        let config = Config::parse_ron(config_content).expect("Failed to parse valid config");
 
         assert_eq!(config.sizes["low"].quality[Extension::JPEG as usize], Extension::JPEG.default_quality());
         assert_eq!(config.sizes["medium"].quality[Extension::WEBP as usize], Extension::WEBP.default_quality());
@@ -580,7 +606,7 @@ mod tests {
             sizes: { "default": Size(width: 100, height: 100) },
         )
         "#);
-        let config = Config::parse(config_content).expect("config should parse");
+        let config = Config::parse_ron(config_content).expect("config should parse");
         assert_eq!(&*config.cache_control_value, DEFAULT_CACHE_CONTROL);
         assert_eq!(&*config.cache_control_fallback, FALLBACK_CACHE_CONTROL);
     }
@@ -605,7 +631,7 @@ mod tests {
             ],
         )
         "#);
-        let config = Config::parse(config_content).expect("parse");
+        let config = Config::parse_ron(config_content).expect("parse");
         assert_eq!(config.statics.len(), 1);
         assert_eq!(config.statics[0].url, "/assets/{path}");
         assert!(config.statics[0].url_regex.is_some());
@@ -643,7 +669,7 @@ mod tests {
             ],
         )
         "#);
-        let config = Config::parse(config_content).expect("parse");
+        let config = Config::parse_ron(config_content).expect("parse");
         assert!(config.statics[0].optimization.js);
         assert!(!config.statics[0].optimization.css);
         assert!(config.statics[0].optimization.html, "html unchanged from default");
@@ -672,7 +698,7 @@ mod tests {
             ],
         )
         "#);
-        let config = Config::parse(config_content).expect("parse");
+        let config = Config::parse_ron(config_content).expect("parse");
         //Some(0) sentinel means "no cap" — files of any size are optimized
         assert!(config.statics[0].allows_optimization_at_size(0));
         assert!(config.statics[0].allows_optimization_at_size(usize::MAX));
@@ -699,7 +725,7 @@ mod tests {
             ],
         )
         "#);
-        let config = Config::parse(config_content).expect("parse");
+        let config = Config::parse_ron(config_content).expect("parse");
         assert_eq!(
             &*config.statics[0].cache_control_value,
             "public, max-age=60, immutable",
@@ -727,7 +753,7 @@ mod tests {
             ],
         )
         "#);
-        let config = Config::parse(config_content).expect("parse");
+        let config = Config::parse_ron(config_content).expect("parse");
         //route without its own cache_control inherits the global one
         assert_eq!(&*config.cache_control_value, "public, max-age=3600");
         assert_eq!(&*config.statics[0].cache_control_value, "public, max-age=3600");
@@ -751,7 +777,7 @@ mod tests {
             ],
         )
         "#);
-        let result = Config::parse(config_content);
+        let result = Config::parse_ron(config_content);
         assert!(result.is_err(), "parse should fail when static root is unreadable");
     }
 
@@ -776,9 +802,109 @@ mod tests {
             cache_control: "private, max-age=300",
         )
         "#);
-        let config = Config::parse(config_content).expect("config should parse");
+        let config = Config::parse_ron(config_content).expect("config should parse");
         assert_eq!(&*config.cache_control_value, "private, max-age=300");
         assert_eq!(&*config.cache_control_fallback, FALLBACK_CACHE_CONTROL);
     }
 
+    #[test]
+    fn test_parse_valid_config_json() {
+        let config_content = String::from(r#"
+        {
+            "extensions": ["AVIF", "WEBP", "JPEG"],
+            "default_format": "JPEG",
+            "roots": ["/build/media"],
+            "url": "/media/{size}/{path}[.{ext}]",
+            "cache_directory": "/build/cache",
+            "sizes": {
+                "low": {"width": 300, "height": 300},
+                "medium": {"width": 600, "height": 600},
+                "high": {"width": 1200, "height": 1200},
+                "product": {"width": 546, "height": 302, "pattern": "^products/", "pre_optimize": true}
+            },
+            "logger": {
+                "path": "/build/debug/impress.log",
+                "level": "WARN"
+            }
+        }
+        "#);
+
+        let config = Config::parse_json(config_content).expect("Failed to parse valid JSON config");
+
+        assert_eq!(config.extensions, vec![Extension::AVIF, Extension::WEBP, Extension::JPEG]);
+        assert_eq!(config.default_format, Extension::JPEG);
+        assert_eq!(config.roots, vec!["/build/media".to_string()]);
+        assert_eq!(config.url, "/media/{size}/{path}[.{ext}]");
+        assert_eq!(config.cache_directory, "/build/cache".to_string());
+        assert!(config.sizes.contains_key("low"));
+        assert!(config.sizes.contains_key("product"));
+        assert!(config.sizes["product"].pattern_regex.is_some());
+        assert!(config.logger.is_some());
+        assert!(config.url_regex.is_some());
+    }
+
+    #[test]
+    fn test_parse_default_quality_values_json() {
+        let config_content = String::from(r#"
+        {
+            "extensions": ["AVIF", "WEBP", "JPEG"],
+            "default_format": "JPEG",
+            "qualities": {"WEBP": 80, "AVIF": 50},
+            "roots": ["/build/media"],
+            "url": "/media/{size}/{path}.{ext}",
+            "cache_directory": "/build/cache",
+            "sizes": {
+                "low": {"width": 300, "height": 300, "qualities": {"JPEG": 100}},
+                "medium": {"width": 600, "height": 600}
+            }
+        }
+        "#);
+
+        let config = Config::parse_json(config_content).expect("Failed to parse valid JSON config");
+
+        //per-size override wins
+        assert_eq!(config.sizes["low"].quality[Extension::JPEG as usize], 100.0);
+        //global override wins over default
+        assert_eq!(config.sizes["low"].quality[Extension::WEBP as usize], 80.0);
+        assert_eq!(config.sizes["medium"].quality[Extension::AVIF as usize], 50.0);
+        //fallback to extension default when neither overrides
+        assert_eq!(config.sizes["medium"].quality[Extension::JPEG as usize], Extension::JPEG.default_quality());
+    }
+
+    #[test]
+    fn test_parse_static_routes_with_defaults_json() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        let config_content = format!(r#"
+        {{
+            "extensions": ["AVIF"],
+            "default_format": "JPEG",
+            "roots": ["/build/media"],
+            "url": "/media/{{size}}/{{path}}.{{ext}}",
+            "cache_directory": "/build/cache",
+            "sizes": {{ "default": {{"width": 100, "height": 100}} }},
+            "static": [
+                {{
+                    "url": "/assets/{{path}}",
+                    "root": "{root}"
+                }}
+            ]
+        }}
+        "#);
+        let config = Config::parse_json(config_content).expect("parse");
+        assert_eq!(config.statics.len(), 1);
+        assert_eq!(config.statics[0].url, "/assets/{path}");
+        assert!(config.statics[0].url_regex.is_some());
+        assert!(config.statics[0].root_canon.is_some());
+        assert!(config.statics[0].optimization.html);
+        assert!(!config.statics[0].optimization.js, "js should default OFF (alpha)");
+        assert_eq!(&*config.statics[0].cache_control_value, DEFAULT_CACHE_CONTROL);
+    }
+
+    #[test]
+    fn test_parse_invalid_json_fails() {
+        let config_content = String::from("{ this is not valid json");
+        let result = Config::parse_json(config_content);
+        assert!(result.is_err(), "malformed JSON should produce a parse error");
+    }
 }
