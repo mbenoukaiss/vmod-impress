@@ -88,4 +88,3 @@ error_from!(Error::Other, bx std::io::Error);
 error_from!(Error::Other, bx varnish::vcl::VclError);
 error_from!(Error::Other, bx log::SetLoggerError);
 error_from!(Error::Other, bx log4rs::config::runtime::ConfigErrors);
-

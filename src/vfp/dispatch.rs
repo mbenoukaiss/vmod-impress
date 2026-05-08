@@ -36,7 +36,11 @@ pub fn optimize_by_content_type(input: &[u8], ct: &str) -> Option<Vec<u8>> {
 pub fn applies_to(ct: &str) -> bool {
     matches!(
         bare(ct).to_ascii_lowercase().as_str(),
-        "text/html" | "text/css" | "text/javascript" | "application/javascript" | "application/json"
+        "text/html"
+            | "text/css"
+            | "text/javascript"
+            | "application/javascript"
+            | "application/json"
     )
 }
 
@@ -53,8 +57,14 @@ mod tests {
         let out = optimize_by_content_type(input, "text/html; charset=utf-8").unwrap();
         assert!(out.len() < input.len());
         let s = std::str::from_utf8(&out).unwrap();
-        assert!(s.contains("<p>hi"), "tag + visible content preserved: {s:?}");
-        assert!(!s.contains("\n  "), "indentation should be collapsed: {s:?}");
+        assert!(
+            s.contains("<p>hi"),
+            "tag + visible content preserved: {s:?}"
+        );
+        assert!(
+            !s.contains("\n  "),
+            "indentation should be collapsed: {s:?}"
+        );
     }
 
     #[test]

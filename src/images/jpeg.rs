@@ -1,7 +1,7 @@
-use image::{DynamicImage, EncodableLayout};
-use turbojpeg::{compress, Image, OwnedBuf, PixelFormat, Subsamp};
 use crate::error::Error;
 use crate::images::OptimizedImage;
+use image::{DynamicImage, EncodableLayout};
+use turbojpeg::{compress, Image, OwnedBuf, PixelFormat, Subsamp};
 
 pub struct Jpeg {
     data: OwnedBuf,
@@ -23,8 +23,18 @@ pub fn to_jpeg(image: &DynamicImage, quality: f32, _prefer_quality: bool) -> Res
     //replicates turbojpeg::compress_image but without the `image` cargo feature,
     //which would force a specific image-crate version onto our dep tree
     let (pixels, format, width, height) = match image {
-        DynamicImage::ImageRgb8(img) => (img.as_raw().as_slice(), PixelFormat::RGB, img.width(), img.height()),
-        DynamicImage::ImageRgba8(img) => (img.as_raw().as_slice(), PixelFormat::RGBA, img.width(), img.height()),
+        DynamicImage::ImageRgb8(img) => (
+            img.as_raw().as_slice(),
+            PixelFormat::RGB,
+            img.width(),
+            img.height(),
+        ),
+        DynamicImage::ImageRgba8(img) => (
+            img.as_raw().as_slice(),
+            PixelFormat::RGBA,
+            img.width(),
+            img.height(),
+        ),
         _ => return Error::err("Unsupported image format"),
     };
 

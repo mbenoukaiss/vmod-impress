@@ -1,17 +1,17 @@
-use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
+use crate::error::Error;
+use crate::images::OptimizationConfig;
 use image::ImageFormat;
 use log::LevelFilter;
-use mediatype::MediaType;
 use mediatype::names::{AVIF, IMAGE, JPEG, WEBP};
+use mediatype::MediaType;
 use regex::Regex;
 use ron::extensions::Extensions;
 use ron::Options;
 use serde::Deserialize;
-use crate::error::Error;
-use crate::images::OptimizationConfig;
+use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 pub type SharedConfig = Arc<Config>;
 
@@ -123,9 +123,7 @@ fn compile_url_template(
         clean = clean.replace(from, to);
     }
     clean = clean.replace(r"\[", "(").replace(r"\]", ")?");
-    if clean.chars().filter(|c| *c == '(').count()
-        != clean.chars().filter(|c| *c == ')').count()
-    {
+    if clean.chars().filter(|c| *c == '(').count() != clean.chars().filter(|c| *c == ')').count() {
         return Error::err("Invalid URL pattern in config file");
     }
     Ok(Regex::new(&clean)?)
@@ -137,21 +135,33 @@ fn compile_url_template(
 /// Other optimizers (HTML, CSS, JSON) default ON.
 #[derive(Deserialize, Clone, Debug)]
 pub struct Optimization {
-    #[serde(default = "default_true")] pub html: bool,
-    #[serde(default = "default_true")] pub css: bool,
-    #[serde(default = "default_false")] pub js: bool,
-    #[serde(default = "default_true")] pub json: bool,
+    #[serde(default = "default_true")]
+    pub html: bool,
+    #[serde(default = "default_true")]
+    pub css: bool,
+    #[serde(default = "default_false")]
+    pub js: bool,
+    #[serde(default = "default_true")]
+    pub json: bool,
 }
 
 impl Default for Optimization {
     fn default() -> Self {
-        Optimization { html: true, css: true, js: false, json: true }
+        Optimization {
+            html: true,
+            css: true,
+            js: false,
+            json: true,
+        }
     }
 }
 
-fn default_true() -> bool { true }
-fn default_false() -> bool { false }
-
+fn default_true() -> bool {
+    true
+}
+fn default_false() -> bool {
+    false
+}
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Size {
@@ -188,11 +198,7 @@ pub enum Extension {
 
 impl Extension {
     pub fn values() -> [Extension; 3] {
-        [
-            Extension::JPEG,
-            Extension::WEBP,
-            Extension::AVIF,
-        ]
+        [Extension::JPEG, Extension::WEBP, Extension::AVIF]
     }
 
     pub fn to_media_type(self) -> MediaType<'static> {
@@ -287,8 +293,14 @@ impl Config {
 
         for size in &mut self.sizes.values_mut() {
             for extension in Extension::values() {
-                let size_quality = size.quality_serialized.as_ref().and_then(|q| q.get(&extension));
-                let config_quality = self.quality_serialized.as_ref().and_then(|q| q.get(&extension));
+                let size_quality = size
+                    .quality_serialized
+                    .as_ref()
+                    .and_then(|q| q.get(&extension));
+                let config_quality = self
+                    .quality_serialized
+                    .as_ref()
+                    .and_then(|q| q.get(&extension));
 
                 size.quality[extension as usize] = if let Some(quality) = size_quality {
                     *quality
@@ -333,11 +345,7 @@ impl Config {
     }
 
     fn build_static_url_regex(url: &str) -> Result<Regex, Error> {
-        compile_url_template(
-            url,
-            &[(r"\{path\}", r"(?<path>.+?)")],
-            &["{path}"],
-        )
+        compile_url_template(url, &[(r"\{path\}", r"(?<path>.+?)")], &["{path}"])
     }
 
     fn build_url_regex(url: &str) -> Result<Regex, Error> {
@@ -358,14 +366,13 @@ impl Default for Config {
         Config {
             extensions: vec![Extension::AVIF],
             default_format: Extension::JPEG,
-            roots: vec![
-                String::from("/dev/null"),
-            ],
+            roots: vec![String::from("/dev/null")],
             url: String::from("/media"),
             cache_directory: String::from("/tmp/impress"),
             pre_optimizer_threads: None,
-            sizes: HashMap::from([
-                (String::from("default"), Size {
+            sizes: HashMap::from([(
+                String::from("default"),
+                Size {
                     width: 500,
                     height: 500,
                     quality: [0.0; 3],
@@ -373,8 +380,8 @@ impl Default for Config {
                     pre_optimize: None,
                     pattern_regex: None,
                     quality_serialized: None,
-                }),
-            ]),
+                },
+            )]),
             logger: None,
             cache_control: None,
             url_regex: None,
@@ -424,7 +431,8 @@ mod tests {
 
     #[test]
     fn test_parse_valid_config() {
-        let config_content = String::from(r#"
+        let config_content = String::from(
+            r#"
         (
             extensions: [AVIF, WEBP, JPEG],
             default_format: JPEG,
@@ -442,11 +450,15 @@ mod tests {
                 level: WARN
             ),
         )
-        "#);
+        "#,
+        );
 
         let config = Config::parse_ron(config_content).expect("Failed to parse valid config");
 
-        assert_eq!(config.extensions, vec![Extension::AVIF, Extension::WEBP, Extension::JPEG]);
+        assert_eq!(
+            config.extensions,
+            vec![Extension::AVIF, Extension::WEBP, Extension::JPEG]
+        );
         assert_eq!(config.default_format, Extension::JPEG);
         assert_eq!(config.roots, vec!["/build/media".to_string()]);
         assert_eq!(config.url, "/media/{size}/{path}[.{ext}]");
@@ -461,7 +473,8 @@ mod tests {
 
     #[test]
     fn test_parse_invalid_url_pattern() {
-        let config_content = String::from(r#"
+        let config_content = String::from(
+            r#"
         (
             extensions: [AVIF, WEBP, JPEG],
             default_format: JPEG,
@@ -479,18 +492,23 @@ mod tests {
                 level: WARN
             ),
         )
-        "#);
+        "#,
+        );
 
         let result = Config::parse_ron(config_content);
         assert!(result.is_err());
         if let Err(err) = result {
-            assert_eq!(err.to_string(), "Invalid URL pattern in config file".to_string());
+            assert_eq!(
+                err.to_string(),
+                "Invalid URL pattern in config file".to_string()
+            );
         }
     }
 
     #[test]
     fn test_parse_default_quality_values() {
-        let config_content = String::from(r#"
+        let config_content = String::from(
+            r#"
         (
             extensions: [AVIF, WEBP, JPEG],
             default_format: JPEG,
@@ -508,13 +526,23 @@ mod tests {
                 level: WARN
             ),
         )
-        "#);
+        "#,
+        );
 
         let config = Config::parse_ron(config_content).expect("Failed to parse valid config");
 
-        assert_eq!(config.sizes["low"].quality[Extension::JPEG as usize], Extension::JPEG.default_quality());
-        assert_eq!(config.sizes["medium"].quality[Extension::WEBP as usize], Extension::WEBP.default_quality());
-        assert_eq!(config.sizes["high"].quality[Extension::AVIF as usize], Extension::AVIF.default_quality());
+        assert_eq!(
+            config.sizes["low"].quality[Extension::JPEG as usize],
+            Extension::JPEG.default_quality()
+        );
+        assert_eq!(
+            config.sizes["medium"].quality[Extension::WEBP as usize],
+            Extension::WEBP.default_quality()
+        );
+        assert_eq!(
+            config.sizes["high"].quality[Extension::AVIF as usize],
+            Extension::AVIF.default_quality()
+        );
     }
     #[test]
     fn test_build_url_regex_valid_pattern() {
@@ -538,7 +566,10 @@ mod tests {
         let captures = regex.captures(url_to_test).expect("Failed to match URL");
 
         assert_eq!(captures.name("size").unwrap().as_str(), "high");
-        assert_eq!(captures.name("path").unwrap().as_str(), "another/path/image");
+        assert_eq!(
+            captures.name("path").unwrap().as_str(),
+            "another/path/image"
+        );
         assert!(captures.name("ext").is_none());
     }
 
@@ -562,7 +593,10 @@ mod tests {
         let captures = regex.captures(url_to_test).expect("Failed to match URL");
 
         assert_eq!(captures.name("size").unwrap().as_str(), "low");
-        assert_eq!(captures.name("path").unwrap().as_str(), "some/other/path/image");
+        assert_eq!(
+            captures.name("path").unwrap().as_str(),
+            "some/other/path/image"
+        );
         assert_eq!(captures.name("ext").unwrap().as_str(), "webp");
     }
 
@@ -575,14 +609,20 @@ mod tests {
         let captures = regex.captures(url_to_test).expect("Failed to match URL");
 
         assert_eq!(captures.name("size").unwrap().as_str(), "low");
-        assert_eq!(captures.name("path").unwrap().as_str(), "some/other/path/image");
+        assert_eq!(
+            captures.name("path").unwrap().as_str(),
+            "some/other/path/image"
+        );
         assert_eq!(captures.name("ext").unwrap().as_str(), "webp");
 
         let url_to_test = "/media/low/some/other/path/image.webp";
         let captures = regex.captures(url_to_test).expect("Failed to match URL");
 
         assert_eq!(captures.name("size").unwrap().as_str(), "low");
-        assert_eq!(captures.name("path").unwrap().as_str(), "some/other/path/image");
+        assert_eq!(
+            captures.name("path").unwrap().as_str(),
+            "some/other/path/image"
+        );
         assert_eq!(captures.name("ext").unwrap().as_str(), "webp");
     }
 
@@ -596,7 +636,8 @@ mod tests {
 
     #[test]
     fn test_parse_cache_control_defaults() {
-        let config_content = String::from(r#"
+        let config_content = String::from(
+            r#"
         (
             extensions: [AVIF],
             default_format: JPEG,
@@ -605,7 +646,8 @@ mod tests {
             cache_directory: "/build/cache",
             sizes: { "default": Size(width: 100, height: 100) },
         )
-        "#);
+        "#,
+        );
         let config = Config::parse_ron(config_content).expect("config should parse");
         assert_eq!(&*config.cache_control_value, DEFAULT_CACHE_CONTROL);
         assert_eq!(&*config.cache_control_fallback, FALLBACK_CACHE_CONTROL);
@@ -615,7 +657,8 @@ mod tests {
     fn test_parse_static_routes_with_defaults() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_string_lossy().to_string();
-        let config_content = format!(r#"
+        let config_content = format!(
+            r#"
         (
             extensions: [AVIF],
             default_format: JPEG,
@@ -630,7 +673,8 @@ mod tests {
                 ),
             ],
         )
-        "#);
+        "#
+        );
         let config = Config::parse_ron(config_content).expect("parse");
         assert_eq!(config.statics.len(), 1);
         assert_eq!(config.statics[0].url, "/assets/{path}");
@@ -638,20 +682,27 @@ mod tests {
         assert!(config.statics[0].root_canon.is_some());
         assert!(config.statics[0].optimization.html);
         assert!(config.statics[0].optimization.css);
-        assert!(!config.statics[0].optimization.js, "js should default OFF (alpha)");
+        assert!(
+            !config.statics[0].optimization.js,
+            "js should default OFF (alpha)"
+        );
         assert!(config.statics[0].optimization.json);
         //2 MiB default cap: small file → optimization allowed
         assert!(config.statics[0].allows_optimization_at_size(1_000_000));
         assert!(!config.statics[0].allows_optimization_at_size(3 * 1024 * 1024));
         //per-route Cache-Control falls back to global default
-        assert_eq!(&*config.statics[0].cache_control_value, DEFAULT_CACHE_CONTROL);
+        assert_eq!(
+            &*config.statics[0].cache_control_value,
+            DEFAULT_CACHE_CONTROL
+        );
     }
 
     #[test]
     fn test_parse_static_route_optimization_overrides() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_string_lossy().to_string();
-        let config_content = format!(r#"
+        let config_content = format!(
+            r#"
         (
             extensions: [AVIF],
             default_format: JPEG,
@@ -668,11 +719,15 @@ mod tests {
                 ),
             ],
         )
-        "#);
+        "#
+        );
         let config = Config::parse_ron(config_content).expect("parse");
         assert!(config.statics[0].optimization.js);
         assert!(!config.statics[0].optimization.css);
-        assert!(config.statics[0].optimization.html, "html unchanged from default");
+        assert!(
+            config.statics[0].optimization.html,
+            "html unchanged from default"
+        );
         assert!(config.statics[0].allows_optimization_at_size(1024));
         assert!(!config.statics[0].allows_optimization_at_size(1025));
     }
@@ -681,7 +736,8 @@ mod tests {
     fn test_optimize_max_bytes_zero_disables_cap() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_string_lossy().to_string();
-        let config_content = format!(r#"
+        let config_content = format!(
+            r#"
         (
             extensions: [AVIF],
             default_format: JPEG,
@@ -697,7 +753,8 @@ mod tests {
                 ),
             ],
         )
-        "#);
+        "#
+        );
         let config = Config::parse_ron(config_content).expect("parse");
         //Some(0) sentinel means "no cap" — files of any size are optimized
         assert!(config.statics[0].allows_optimization_at_size(0));
@@ -708,7 +765,8 @@ mod tests {
     fn test_parse_static_route_per_route_cache_control() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_string_lossy().to_string();
-        let config_content = format!(r#"
+        let config_content = format!(
+            r#"
         (
             extensions: [AVIF],
             default_format: JPEG,
@@ -724,7 +782,8 @@ mod tests {
                 ),
             ],
         )
-        "#);
+        "#
+        );
         let config = Config::parse_ron(config_content).expect("parse");
         assert_eq!(
             &*config.statics[0].cache_control_value,
@@ -736,7 +795,8 @@ mod tests {
     fn test_parse_static_route_inherits_global_cache_control() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_string_lossy().to_string();
-        let config_content = format!(r#"
+        let config_content = format!(
+            r#"
         (
             extensions: [AVIF],
             default_format: JPEG,
@@ -752,16 +812,21 @@ mod tests {
                 ),
             ],
         )
-        "#);
+        "#
+        );
         let config = Config::parse_ron(config_content).expect("parse");
         //route without its own cache_control inherits the global one
         assert_eq!(&*config.cache_control_value, "public, max-age=3600");
-        assert_eq!(&*config.statics[0].cache_control_value, "public, max-age=3600");
+        assert_eq!(
+            &*config.statics[0].cache_control_value,
+            "public, max-age=3600"
+        );
     }
 
     #[test]
     fn test_parse_static_route_unreadable_root_fails() {
-        let config_content = String::from(r#"
+        let config_content = String::from(
+            r#"
         (
             extensions: [AVIF],
             default_format: JPEG,
@@ -776,9 +841,13 @@ mod tests {
                 ),
             ],
         )
-        "#);
+        "#,
+        );
         let result = Config::parse_ron(config_content);
-        assert!(result.is_err(), "parse should fail when static root is unreadable");
+        assert!(
+            result.is_err(),
+            "parse should fail when static root is unreadable"
+        );
     }
 
     #[test]
@@ -791,7 +860,8 @@ mod tests {
     fn test_parse_cache_control_override() {
         //user-supplied raw header replaces the default; image fallback stays
         //hardcoded "no-cache" regardless
-        let config_content = String::from(r#"
+        let config_content = String::from(
+            r#"
         (
             extensions: [AVIF],
             default_format: JPEG,
@@ -801,7 +871,8 @@ mod tests {
             sizes: { "default": Size(width: 100, height: 100) },
             cache_control: "private, max-age=300",
         )
-        "#);
+        "#,
+        );
         let config = Config::parse_ron(config_content).expect("config should parse");
         assert_eq!(&*config.cache_control_value, "private, max-age=300");
         assert_eq!(&*config.cache_control_fallback, FALLBACK_CACHE_CONTROL);
@@ -809,7 +880,8 @@ mod tests {
 
     #[test]
     fn test_parse_valid_config_json() {
-        let config_content = String::from(r#"
+        let config_content = String::from(
+            r#"
         {
             "extensions": ["AVIF", "WEBP", "JPEG"],
             "default_format": "JPEG",
@@ -827,11 +899,15 @@ mod tests {
                 "level": "WARN"
             }
         }
-        "#);
+        "#,
+        );
 
         let config = Config::parse_json(config_content).expect("Failed to parse valid JSON config");
 
-        assert_eq!(config.extensions, vec![Extension::AVIF, Extension::WEBP, Extension::JPEG]);
+        assert_eq!(
+            config.extensions,
+            vec![Extension::AVIF, Extension::WEBP, Extension::JPEG]
+        );
         assert_eq!(config.default_format, Extension::JPEG);
         assert_eq!(config.roots, vec!["/build/media".to_string()]);
         assert_eq!(config.url, "/media/{size}/{path}[.{ext}]");
@@ -845,7 +921,8 @@ mod tests {
 
     #[test]
     fn test_parse_default_quality_values_json() {
-        let config_content = String::from(r#"
+        let config_content = String::from(
+            r#"
         {
             "extensions": ["AVIF", "WEBP", "JPEG"],
             "default_format": "JPEG",
@@ -858,7 +935,8 @@ mod tests {
                 "medium": {"width": 600, "height": 600}
             }
         }
-        "#);
+        "#,
+        );
 
         let config = Config::parse_json(config_content).expect("Failed to parse valid JSON config");
 
@@ -866,16 +944,23 @@ mod tests {
         assert_eq!(config.sizes["low"].quality[Extension::JPEG as usize], 100.0);
         //global override wins over default
         assert_eq!(config.sizes["low"].quality[Extension::WEBP as usize], 80.0);
-        assert_eq!(config.sizes["medium"].quality[Extension::AVIF as usize], 50.0);
+        assert_eq!(
+            config.sizes["medium"].quality[Extension::AVIF as usize],
+            50.0
+        );
         //fallback to extension default when neither overrides
-        assert_eq!(config.sizes["medium"].quality[Extension::JPEG as usize], Extension::JPEG.default_quality());
+        assert_eq!(
+            config.sizes["medium"].quality[Extension::JPEG as usize],
+            Extension::JPEG.default_quality()
+        );
     }
 
     #[test]
     fn test_parse_static_routes_with_defaults_json() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_string_lossy().to_string();
-        let config_content = format!(r#"
+        let config_content = format!(
+            r#"
         {{
             "extensions": ["AVIF"],
             "default_format": "JPEG",
@@ -890,21 +975,31 @@ mod tests {
                 }}
             ]
         }}
-        "#);
+        "#
+        );
         let config = Config::parse_json(config_content).expect("parse");
         assert_eq!(config.statics.len(), 1);
         assert_eq!(config.statics[0].url, "/assets/{path}");
         assert!(config.statics[0].url_regex.is_some());
         assert!(config.statics[0].root_canon.is_some());
         assert!(config.statics[0].optimization.html);
-        assert!(!config.statics[0].optimization.js, "js should default OFF (alpha)");
-        assert_eq!(&*config.statics[0].cache_control_value, DEFAULT_CACHE_CONTROL);
+        assert!(
+            !config.statics[0].optimization.js,
+            "js should default OFF (alpha)"
+        );
+        assert_eq!(
+            &*config.statics[0].cache_control_value,
+            DEFAULT_CACHE_CONTROL
+        );
     }
 
     #[test]
     fn test_parse_invalid_json_fails() {
         let config_content = String::from("{ this is not valid json");
         let result = Config::parse_json(config_content);
-        assert!(result.is_err(), "malformed JSON should produce a parse error");
+        assert!(
+            result.is_err(),
+            "malformed JSON should produce a parse error"
+        );
     }
 }

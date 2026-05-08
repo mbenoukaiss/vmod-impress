@@ -1,8 +1,8 @@
-use std::ffi::c_int;
-use image::DynamicImage;
-use webp::{Encoder, WebPConfig, WebPMemory};
 use crate::error::Error;
 use crate::images::OptimizedImage;
+use image::DynamicImage;
+use std::ffi::c_int;
+use webp::{Encoder, WebPConfig, WebPMemory};
 
 pub struct Webp {
     data: WebPMemory,
@@ -38,5 +38,10 @@ pub fn to_webp(image: &DynamicImage, quality: f32, autofilter: bool) -> Result<W
         .expect("Unsupported format")
         .encode_advanced(&config)
         .map(Into::into)
-        .map_err(|err| Error::new(format!("Failed to create webp config, got code {}", err as i32)))
+        .map_err(|err| {
+            Error::new(format!(
+                "Failed to create webp config, got code {}",
+                err as i32
+            ))
+        })
 }

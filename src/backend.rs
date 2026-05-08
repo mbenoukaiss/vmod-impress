@@ -1,13 +1,13 @@
-use std::fs::File;
-use std::io::{BufReader, ErrorKind, Read, Take};
-use std::str::FromStr;
-use chrono::{DateTime, Utc};
-use headers_accept::Accept;
-use varnish::vcl::{Ctx, HttpHeaders, StrOrBytes, VclBackend, VclError, VclResponse};
 use crate::cache::Cache;
 use crate::config::SharedConfig;
 use crate::error::Error;
 use crate::static_files::Transfer;
+use chrono::{DateTime, Utc};
+use headers_accept::Accept;
+use std::fs::File;
+use std::io::{BufReader, ErrorKind, Read, Take};
+use std::str::FromStr;
+use varnish::vcl::{Ctx, HttpHeaders, StrOrBytes, VclBackend, VclError, VclResponse};
 
 fn utf8_header(h: Option<StrOrBytes<'_>>) -> Option<&str> {
     match h {
@@ -23,10 +23,7 @@ pub struct FileBackend {
 
 impl FileBackend {
     pub fn new(config: SharedConfig, cache: Cache) -> Self {
-        FileBackend {
-            config,
-            cache,
-        }
+        FileBackend { config, cache }
     }
 }
 
@@ -46,8 +43,12 @@ impl FileBackend {
         //owned values (FetchResult, ResponseShape) that no longer touch bereq,
         //so we can switch to &mut beresp afterwards via disjoint-field borrow
         let (shape, result) = {
-            let bereq = ctx.http_bereq.as_ref().ok_or_else(|| Error::new("Failed to get request data"))?;
-            let url_raw = utf8_header(bereq.url()).ok_or_else(|| Error::new("Failed to get URL"))?;
+            let bereq = ctx
+                .http_bereq
+                .as_ref()
+                .ok_or_else(|| Error::new("Failed to get request data"))?;
+            let url_raw =
+                utf8_header(bereq.url()).ok_or_else(|| Error::new("Failed to get URL"))?;
             let method = utf8_header(bereq.method()).unwrap_or("");
             let if_none_match = utf8_header(bereq.header("if-none-match"));
             let if_modified_since = utf8_header(bereq.header("if-modified-since"));
@@ -63,32 +64,55 @@ impl FileBackend {
             //through to the image regex.
             let result = 'dispatch: {
                 for (route_id, route) in self.config.statics.iter().enumerate() {
-                    let regex = route.url_regex.as_ref().expect("Badly initialized static route");
+                    let regex = route
+                        .url_regex
+                        .as_ref()
+                        .expect("Badly initialized static route");
                     if let Some(captures) = regex.captures(&url) {
                         let rel_path = &captures["path"];
-                        break 'dispatch crate::static_files::serve(&self.config, route_id, rel_path)?;
+                        break 'dispatch crate::static_files::serve(
+                            &self.config,
+                            route_id,
+                            rel_path,
+                        )?;
                     }
                 }
-                let pattern = self.config.url_regex.as_ref().expect("Badly initialized config");
+                let pattern = self
+                    .config
+                    .url_regex
+                    .as_ref()
+                    .expect("Badly initialized config");
                 match pattern.captures(&url) {
-                    Some(captures) if self.config.sizes.get(&captures["size"]).is_some_and(|p| p.matches(&captures["path"])) => {
-                        self.cache.get(&captures["path"], &captures["size"], accept)?
+                    Some(captures)
+                        if self
+                            .config
+                            .sizes
+                            .get(&captures["size"])
+                            .is_some_and(|p| p.matches(&captures["path"])) =>
+                    {
+                        self.cache
+                            .get(&captures["path"], &captures["size"], accept)?
                     }
                     _ => None,
                 }
             };
 
-            let shape = result.as_ref().map(|r| decide_response_shape(
-                method,
-                if_none_match,
-                if_modified_since,
-                &r.etag,
-                r.last_modified,
-            ));
+            let shape = result.as_ref().map(|r| {
+                decide_response_shape(
+                    method,
+                    if_none_match,
+                    if_modified_since,
+                    &r.etag,
+                    r.last_modified,
+                )
+            });
             (shape, result)
         };
 
-        let beresp = ctx.http_beresp.as_mut().ok_or_else(|| Error::new("Failed to get response"))?;
+        let beresp = ctx
+            .http_beresp
+            .as_mut()
+            .ok_or_else(|| Error::new("Failed to get response"))?;
         beresp.set_proto("HTTP/1.1")?;
 
         let result = match result {
@@ -140,7 +164,7 @@ impl FileBackend {
     fn parse_accept_header(&self, bereq: &HttpHeaders) -> Option<Accept> {
         match utf8_header(bereq.header("accept")) {
             Some(accept) if accept.trim() != "*/*" => Accept::from_str(accept).ok(),
-            _ => None
+            _ => None,
         }
     }
 }
@@ -150,12 +174,18 @@ impl VclBackend<Transfer> for FileBackend {
         match self.get_data(ctx) {
             Ok(transfer) => Ok(transfer),
             Err(e) if is_not_found(&e) => {
-                let beresp = ctx.http_beresp.as_mut().ok_or_else(|| VclError::new("Failed to get response".to_owned()))?;
+                let beresp = ctx
+                    .http_beresp
+                    .as_mut()
+                    .ok_or_else(|| VclError::new("Failed to get response".to_owned()))?;
                 beresp.set_status(404);
                 Ok(None)
             }
             Err(e) => {
-                let beresp = ctx.http_beresp.as_mut().ok_or_else(|| VclError::new("Failed to get response".to_owned()))?;
+                let beresp = ctx
+                    .http_beresp
+                    .as_mut()
+                    .ok_or_else(|| VclError::new("Failed to get response".to_owned()))?;
                 beresp.set_status(500);
                 let _ = beresp.set_header("error", &e.to_string());
 
@@ -210,12 +240,17 @@ fn decide_response_shape(
         }
     }
 
-    ResponseShape::Ok { send_body: method == "GET" }
+    ResponseShape::Ok {
+        send_body: method == "GET",
+    }
 }
 
 fn etag_matches(client: &str, ours: &str) -> bool {
     let normalize = |s: &str| {
-        s.strip_prefix("W/").unwrap_or(s).trim_matches('"').to_owned()
+        s.strip_prefix("W/")
+            .unwrap_or(s)
+            .trim_matches('"')
+            .to_owned()
     };
     normalize(client) == normalize(ours)
 }
@@ -318,7 +353,9 @@ mod tests {
         // RFC 7232 §3.3: 304 when last-modified <= client date.
         // We compare second-precision since HTTP dates have second precision.
         let last_modified = t(1_700_000_000);
-        let ims = last_modified.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        let ims = last_modified
+            .format("%a, %d %b %Y %H:%M:%S GMT")
+            .to_string();
         assert_eq!(
             decide_response_shape("GET", None, Some(&ims), "\"abc\"", last_modified),
             ResponseShape::NotModified,
@@ -328,7 +365,9 @@ mod tests {
     #[test]
     fn ims_after_last_modified_returns_not_modified() {
         let last_modified = t(1_700_000_000);
-        let ims_later = (last_modified + chrono::Duration::seconds(60)).format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        let ims_later = (last_modified + chrono::Duration::seconds(60))
+            .format("%a, %d %b %Y %H:%M:%S GMT")
+            .to_string();
         assert_eq!(
             decide_response_shape("GET", None, Some(&ims_later), "\"abc\"", last_modified),
             ResponseShape::NotModified,
@@ -338,7 +377,9 @@ mod tests {
     #[test]
     fn ims_before_last_modified_returns_ok() {
         let last_modified = t(1_700_000_000);
-        let ims_earlier = (last_modified - chrono::Duration::seconds(60)).format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        let ims_earlier = (last_modified - chrono::Duration::seconds(60))
+            .format("%a, %d %b %Y %H:%M:%S GMT")
+            .to_string();
         assert_eq!(
             decide_response_shape("GET", None, Some(&ims_earlier), "\"abc\"", last_modified),
             ResponseShape::Ok { send_body: true },

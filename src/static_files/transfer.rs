@@ -1,6 +1,6 @@
+use crate::backend::FileTransfer;
 use std::io::{Cursor, Read};
 use varnish::vcl::{VclError, VclResponse};
-use crate::backend::FileTransfer;
 
 pub struct MemoryTransfer {
     cursor: Cursor<Vec<u8>>,
@@ -10,7 +10,10 @@ pub struct MemoryTransfer {
 impl MemoryTransfer {
     pub fn new(bytes: Vec<u8>) -> Self {
         let total = bytes.len();
-        MemoryTransfer { cursor: Cursor::new(bytes), total }
+        MemoryTransfer {
+            cursor: Cursor::new(bytes),
+            total,
+        }
     }
 
     //size() is only consumed in tests; production code reaches the byte count
@@ -23,7 +26,9 @@ impl MemoryTransfer {
 
 impl VclResponse for MemoryTransfer {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, VclError> {
-        self.cursor.read(buf).map_err(|e| VclError::new(e.to_string()))
+        self.cursor
+            .read(buf)
+            .map_err(|e| VclError::new(e.to_string()))
     }
 
     fn len(&self) -> Option<usize> {

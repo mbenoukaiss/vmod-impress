@@ -117,9 +117,15 @@ pub fn make_size(
     pre_optimize: Option<bool>,
 ) -> Size {
     let mut quality_serialized: HashMap<Extension, f32> = HashMap::new();
-    if let Some(q) = quality_jpeg { quality_serialized.insert(Extension::JPEG, q); }
-    if let Some(q) = quality_webp { quality_serialized.insert(Extension::WEBP, q); }
-    if let Some(q) = quality_avif { quality_serialized.insert(Extension::AVIF, q); }
+    if let Some(q) = quality_jpeg {
+        quality_serialized.insert(Extension::JPEG, q);
+    }
+    if let Some(q) = quality_webp {
+        quality_serialized.insert(Extension::WEBP, q);
+    }
+    if let Some(q) = quality_avif {
+        quality_serialized.insert(Extension::AVIF, q);
+    }
     let quality_serialized = if quality_serialized.is_empty() {
         None
     } else {
@@ -198,14 +204,20 @@ mod tests {
         assert!(cfg.url_regex.is_some());
         assert!(cfg.sizes.contains_key("default"));
         //extension default applied since neither builder global nor per-size override is set
-        assert_eq!(cfg.sizes["default"].quality[Extension::JPEG as usize], Extension::JPEG.default_quality());
+        assert_eq!(
+            cfg.sizes["default"].quality[Extension::JPEG as usize],
+            Extension::JPEG.default_quality()
+        );
     }
 
     #[test]
     fn missing_roots_errors() {
         let mut b = fresh_builder();
         b.extensions.push(Extension::JPEG);
-        b.sizes.insert("default".to_string(), make_size(100, 100, None, None, None, None, None));
+        b.sizes.insert(
+            "default".to_string(),
+            make_size(100, 100, None, None, None, None, None),
+        );
         assert!(b.into_config().is_err());
     }
 
@@ -213,7 +225,10 @@ mod tests {
     fn missing_extensions_errors() {
         let mut b = fresh_builder();
         b.roots.push("/tmp".to_string());
-        b.sizes.insert("default".to_string(), make_size(100, 100, None, None, None, None, None));
+        b.sizes.insert(
+            "default".to_string(),
+            make_size(100, 100, None, None, None, None, None),
+        );
         assert!(b.into_config().is_err());
     }
 
@@ -230,8 +245,14 @@ mod tests {
         let mut b = fresh_builder();
         b.roots.push("/tmp".to_string());
         b.extensions.push(Extension::JPEG);
-        b.sizes.insert("low".to_string(), make_size(100, 100, None, None, None, None, None));
-        b.sizes.insert("low".to_string(), make_size(200, 200, None, None, None, None, None));
+        b.sizes.insert(
+            "low".to_string(),
+            make_size(100, 100, None, None, None, None, None),
+        );
+        b.sizes.insert(
+            "low".to_string(),
+            make_size(200, 200, None, None, None, None, None),
+        );
         let cfg = b.into_config().expect("build");
         assert_eq!(cfg.sizes["low"].width, 200);
         assert_eq!(cfg.sizes["low"].height, 200);
@@ -255,10 +276,19 @@ mod tests {
 
         let cfg = b.into_config().expect("build");
         //inherited from builder global
-        assert_eq!(cfg.sizes["no_override"].quality[Extension::WEBP as usize], 88.0);
-        assert_eq!(cfg.sizes["no_override"].quality[Extension::JPEG as usize], 77.0);
+        assert_eq!(
+            cfg.sizes["no_override"].quality[Extension::WEBP as usize],
+            88.0
+        );
+        assert_eq!(
+            cfg.sizes["no_override"].quality[Extension::JPEG as usize],
+            77.0
+        );
         //per-size override wins
-        assert_eq!(cfg.sizes["with_override"].quality[Extension::WEBP as usize], 95.0);
+        assert_eq!(
+            cfg.sizes["with_override"].quality[Extension::WEBP as usize],
+            95.0
+        );
     }
 
     #[test]
@@ -269,12 +299,18 @@ mod tests {
         let mut b = fresh_builder();
         b.roots.push("/tmp".to_string());
         b.extensions.push(Extension::JPEG);
-        b.sizes.insert("default".to_string(), make_size(100, 100, None, None, None, None, None));
+        b.sizes.insert(
+            "default".to_string(),
+            make_size(100, 100, None, None, None, None, None),
+        );
         b.statics.push(make_static_route(
             "/assets/{path}".to_string(),
             root,
             None,
-            None, None, None, None,
+            None,
+            None,
+            None,
+            None,
             Some(0),
         ));
 
@@ -292,12 +328,18 @@ mod tests {
         b.cache_control = Some("public, max-age=42".to_string());
         b.roots.push("/tmp".to_string());
         b.extensions.push(Extension::JPEG);
-        b.sizes.insert("default".to_string(), make_size(100, 100, None, None, None, None, None));
+        b.sizes.insert(
+            "default".to_string(),
+            make_size(100, 100, None, None, None, None, None),
+        );
         b.statics.push(make_static_route(
             "/assets/{path}".to_string(),
             root,
             None,
-            None, None, None, None,
+            None,
+            None,
+            None,
+            None,
             None,
         ));
 

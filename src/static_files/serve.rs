@@ -19,10 +19,18 @@ use crate::static_files::{optimizer, security, MemoryTransfer, Transfer};
 /// not a stale 304.
 const STATIC_OPTIMIZER_VERSION: u64 = 1;
 
-pub fn serve(config: &Config, route_id: usize, rel_path: &str) -> Result<Option<FetchResult>, Error> {
-    let route = config.statics.get(route_id)
+pub fn serve(
+    config: &Config,
+    route_id: usize,
+    rel_path: &str,
+) -> Result<Option<FetchResult>, Error> {
+    let route = config
+        .statics
+        .get(route_id)
         .ok_or_else(|| Error::new(format!("unknown route id {route_id}")))?;
-    let root_canon = route.root_canon.as_ref()
+    let root_canon = route
+        .root_canon
+        .as_ref()
         .ok_or_else(|| Error::new("route root_canon not initialized"))?;
 
     let source = match security::safe_join(root_canon, rel_path) {
@@ -132,7 +140,15 @@ fn build_fetch_result(
 
 fn static_etag(inode: u64, size: u64, mtime_secs: i64, mime: &str, is_optimized: bool) -> String {
     let mut h = DefaultHasher::new();
-    (inode, size, mtime_secs, mime, is_optimized, STATIC_OPTIMIZER_VERSION).hash(&mut h);
+    (
+        inode,
+        size,
+        mtime_secs,
+        mime,
+        is_optimized,
+        STATIC_OPTIMIZER_VERSION,
+    )
+        .hash(&mut h);
     format!("\"{}\"", h.finish())
 }
 
@@ -164,11 +180,15 @@ fn mime_for_ext(ext: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{Optimization, StaticRoute};
     use std::path::PathBuf;
     use tempfile::TempDir;
-    use crate::config::{Optimization, StaticRoute};
 
-    fn make_config(static_root: &std::path::Path, optimization: Optimization, max_bytes: Option<usize>) -> Config {
+    fn make_config(
+        static_root: &std::path::Path,
+        optimization: Optimization,
+        max_bytes: Option<usize>,
+    ) -> Config {
         Config {
             statics: vec![StaticRoute {
                 url: "/x/{path}".into(),
@@ -189,7 +209,12 @@ mod tests {
     }
 
     fn opt_all_on() -> Optimization {
-        Optimization { html: true, css: true, js: true, json: true }
+        Optimization {
+            html: true,
+            css: true,
+            js: true,
+            json: true,
+        }
     }
 
     #[test]
@@ -274,7 +299,8 @@ mod tests {
         std::os::unix::fs::symlink(&real, src.path().join("alias.css")).unwrap();
         let config = make_config(src.path(), opt_all_on(), None);
 
-        let result = serve(&config, 0, "alias.css").unwrap()
+        let result = serve(&config, 0, "alias.css")
+            .unwrap()
             .expect("symlink-to-internal-file should serve");
         assert_eq!(result.mime, "text/css; charset=utf-8");
     }
@@ -351,7 +377,13 @@ mod tests {
         //differ — guards against inode reuse / file renaming where the
         //inode could repeat with a new extension
         let a = static_etag(42, 100, 1_700_000_000, "text/css; charset=utf-8", true);
-        let b = static_etag(42, 100, 1_700_000_000, "application/json; charset=utf-8", true);
+        let b = static_etag(
+            42,
+            100,
+            1_700_000_000,
+            "application/json; charset=utf-8",
+            true,
+        );
         assert_ne!(a, b);
     }
 
@@ -363,7 +395,14 @@ mod tests {
         let v1 = static_etag(42, 100, 1_700_000_000, "text/css; charset=utf-8", true);
         let mut h = std::hash::DefaultHasher::new();
         std::hash::Hash::hash(
-            &(42u64, 100u64, 1_700_000_000_i64, "text/css; charset=utf-8", true, STATIC_OPTIMIZER_VERSION + 1),
+            &(
+                42u64,
+                100u64,
+                1_700_000_000_i64,
+                "text/css; charset=utf-8",
+                true,
+                STATIC_OPTIMIZER_VERSION + 1,
+            ),
             &mut h,
         );
         let v2_with_other_salt = format!("\"{}\"", std::hash::Hasher::finish(&h));
@@ -380,8 +419,10 @@ mod tests {
         let config = make_config(src.path(), opt_all_on(), Some(64));
 
         let result = serve(&config, 0, "a.html").unwrap().unwrap();
-        assert!(matches!(result.data, Transfer::File(_)),
-                "oversized file should stream from disk, not load into memory");
+        assert!(
+            matches!(result.data, Transfer::File(_)),
+            "oversized file should stream from disk, not load into memory"
+        );
         assert!(!result.is_optimized);
     }
 
@@ -419,7 +460,8 @@ mod tests {
     #[test]
     fn js_optimization_returns_smaller_memory_body() {
         let src = TempDir::new().unwrap();
-        let payload = b"const longName = 1 + 2;\nconst other = longName + 3;\nconsole.log(other);\n";
+        let payload =
+            b"const longName = 1 + 2;\nconst other = longName + 3;\nconsole.log(other);\n";
         write(&src.path().join("a.js"), payload);
         let config = make_config(src.path(), opt_all_on(), None);
 
@@ -465,7 +507,12 @@ mod tests {
         let payload: Vec<u8> = b".foo {  color:  red ; }".repeat(50);
         write(&src.path().join("a.css"), &payload);
         let opt_on = opt_all_on();
-        let opt_off = Optimization { html: true, css: false, js: true, json: true };
+        let opt_off = Optimization {
+            html: true,
+            css: false,
+            js: true,
+            json: true,
+        };
         let cfg_on = make_config(src.path(), opt_on, None);
         let cfg_off = make_config(src.path(), opt_off, None);
 
@@ -489,7 +536,10 @@ mod tests {
         use std::io::Write as _;
         let src = TempDir::new().unwrap();
         let path = src.path().join("a.css");
-        write(&path, b".v1{color:red}.spacer{display:none}.spacer{display:none}.spacer{display:none}");
+        write(
+            &path,
+            b".v1{color:red}.spacer{display:none}.spacer{display:none}.spacer{display:none}",
+        );
 
         //Race the rename in: we hold open the file in this thread, replace
         //the path with a sibling that has different content, and then run
@@ -505,7 +555,10 @@ mod tests {
         std::fs::rename(&other, &path).unwrap();
         let mut buf = String::new();
         std::io::Read::read_to_string(&mut held, &mut buf).unwrap();
-        assert!(buf.contains("v1"), "fd held across rename must still read v1: got {buf:?}");
+        assert!(
+            buf.contains("v1"),
+            "fd held across rename must still read v1: got {buf:?}"
+        );
 
         //Now run serve against the post-rename path: it opens a fresh fd and
         //reads the new bytes from the same fd it stat'd, so etag and body are
@@ -520,7 +573,12 @@ mod tests {
         let src = TempDir::new().unwrap();
         let payload: Vec<u8> = b".foo {  color:  red ; }".repeat(50);
         write(&src.path().join("a.css"), &payload);
-        let opt = Optimization { html: true, css: false, js: true, json: true };
+        let opt = Optimization {
+            html: true,
+            css: false,
+            js: true,
+            json: true,
+        };
         let config = make_config(src.path(), opt, None);
 
         let result = serve(&config, 0, "a.css").unwrap().unwrap();

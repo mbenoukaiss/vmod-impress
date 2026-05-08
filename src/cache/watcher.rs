@@ -1,15 +1,23 @@
+use crate::cache::file_saver::{InFlight, OptimizeJob};
+use crate::cache::{CacheData, CacheImage};
+use crate::config::{Config, SharedConfig};
+use crate::error::Error;
+use image::ImageFormat;
+use notify::event::{AccessKind, AccessMode, ModifyKind, RemoveKind, RenameMode};
+use notify::{
+    Config as NotifyConfig, Error as NotifyError, Event, EventKind, RecommendedWatcher,
+    RecursiveMode, Watcher,
+};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::{fs, mem, sync, thread};
-use image::ImageFormat;
-use notify::{Config as NotifyConfig, Error as NotifyError, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use notify::event::{AccessKind, AccessMode, ModifyKind, RemoveKind, RenameMode};
-use crate::cache::{CacheData, CacheImage};
-use crate::cache::file_saver::{InFlight, OptimizeJob};
-use crate::config::{Config, SharedConfig};
-use crate::error::Error;
 
-pub fn spawn(config: SharedConfig, data: CacheData, create_image_tx: Sender<OptimizeJob>, in_flight: InFlight) {
+pub fn spawn(
+    config: SharedConfig,
+    data: CacheData,
+    create_image_tx: Sender<OptimizeJob>,
+    in_flight: InFlight,
+) {
     thread::spawn(move || {
         let (tx, rx) = sync::mpsc::channel();
 
@@ -32,15 +40,27 @@ pub fn spawn(config: SharedConfig, data: CacheData, create_image_tx: Sender<Opti
     });
 }
 
-fn event_handler(config: SharedConfig, data: CacheData, rx: Receiver<Result<Event, NotifyError>>, create_image_tx: Sender<OptimizeJob>, in_flight: InFlight) {
+fn event_handler(
+    config: SharedConfig,
+    data: CacheData,
+    rx: Receiver<Result<Event, NotifyError>>,
+    create_image_tx: Sender<OptimizeJob>,
+    in_flight: InFlight,
+) {
     while let Ok(result) = rx.recv() {
         match result {
             Ok(event) => {
                 let result = match event.kind {
-                    EventKind::Access(AccessKind::Close(AccessMode::Write)) => handle_modification(event, &config, &data, &create_image_tx, &in_flight),
+                    EventKind::Access(AccessKind::Close(AccessMode::Write)) => {
+                        handle_modification(event, &config, &data, &create_image_tx, &in_flight)
+                    }
                     EventKind::Remove(RemoveKind::File) => handle_deletion(event, &config, &data),
-                    EventKind::Modify(ModifyKind::Name(RenameMode::From)) => handle_deletion(event, &config, &data),
-                    EventKind::Modify(ModifyKind::Name(RenameMode::To)) => handle_modification(event, &config, &data, &create_image_tx, &in_flight),
+                    EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
+                        handle_deletion(event, &config, &data)
+                    }
+                    EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {
+                        handle_modification(event, &config, &data, &create_image_tx, &in_flight)
+                    }
                     _ => Ok(()),
                 };
 
@@ -53,7 +73,13 @@ fn event_handler(config: SharedConfig, data: CacheData, rx: Receiver<Result<Even
     }
 }
 
-fn handle_modification(event: Event, config: &Config, data: &CacheData, create_image_tx: &Sender<OptimizeJob>, in_flight: &InFlight) -> Result<(), Error> {
+fn handle_modification(
+    event: Event,
+    config: &Config,
+    data: &CacheData,
+    create_image_tx: &Sender<OptimizeJob>,
+    in_flight: &InFlight,
+) -> Result<(), Error> {
     let image_path = get_image_path(&event)?;
     let image_id = get_image_id(&image_path, config);
 
@@ -64,7 +90,10 @@ fn handle_modification(event: Event, config: &Config, data: &CacheData, create_i
             let mime = ImageFormat::from_path(&image_path)
                 .map(|f| f.to_mime_type())
                 .unwrap_or("application/octet-stream");
-            lock.insert(image_id.to_string(), CacheImage::new(image_path.to_owned(), mime));
+            lock.insert(
+                image_id.to_string(),
+                CacheImage::new(image_path.to_owned(), mime),
+            );
         }
 
         if let Some(cache) = lock.get_mut(&image_id) {
@@ -82,7 +111,9 @@ fn handle_modification(event: Event, config: &Config, data: &CacheData, create_i
 
     //one OptimizeJob per (image_id, size) covering all configured extensions —
     //saver reads + resizes the source once for the whole job
-    for (size_name, _size) in config.sizes.iter()
+    for (size_name, _size) in config
+        .sizes
+        .iter()
         .filter(|(_, size)| size.matches(&image_id) && size.pre_optimize.unwrap_or(false))
     {
         let key = (image_id.clone(), size_name.clone());
@@ -133,8 +164,12 @@ fn get_image_id(path: &str, config: &Config) -> String {
     let mut image_id = PathBuf::from(path);
     image_id.set_extension("");
 
-   config.roots.iter()
-       .fold(image_id.as_path(), |acc, root| acc.strip_prefix(root).unwrap_or(acc))
-       .to_string_lossy()
-       .to_string()
+    config
+        .roots
+        .iter()
+        .fold(image_id.as_path(), |acc, root| {
+            acc.strip_prefix(root).unwrap_or(acc)
+        })
+        .to_string_lossy()
+        .to_string()
 }

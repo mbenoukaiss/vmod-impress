@@ -8,23 +8,23 @@ mod backend;
 mod builder;
 mod cache;
 mod config;
-mod images;
 mod error;
+mod images;
 mod static_files;
 mod utils;
 mod vfp;
 
+use crate::backend::FileBackend;
+use crate::builder::EngineState;
+use crate::config::Logger as LoggerConfig;
+use crate::error::Error;
+use crate::static_files::Transfer;
+use log::LevelFilter;
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, Config as LogConfig, Root};
 use log4rs::encode::pattern::PatternEncoder;
-use log::LevelFilter;
 use parking_lot::Mutex;
 use varnish::vcl::Backend;
-use crate::builder::EngineState;
-use crate::error::Error;
-use crate::backend::FileBackend;
-use crate::config::Logger as LoggerConfig;
-use crate::static_files::Transfer;
 
 #[allow(non_camel_case_types)]
 struct new {
@@ -39,17 +39,15 @@ struct engine {
 
 #[varnish::vmod]
 mod impress {
+    use log::LevelFilter;
+    use parking_lot::Mutex;
     use std::str::FromStr;
     use std::sync::Arc;
-    use parking_lot::Mutex;
     use varnish::ffi::VCL_BACKEND;
     use varnish::vcl::{Backend, Ctx, Event, FetchFilters, VclError};
-    use log::LevelFilter;
 
     use super::{engine, new, setup_logging, FileBackend};
-    use crate::builder::{
-        make_size, make_static_route, BuilderState, EngineState,
-    };
+    use crate::builder::{make_size, make_static_route, BuilderState, EngineState};
     use crate::cache::Cache;
     use crate::config::{Config, Extension, Logger as LoggerConfig};
     use crate::vfp::MinifyVfp;
@@ -119,8 +117,11 @@ mod impress {
             let mut builder = BuilderState::new(url.to_string(), cache_directory.to_string());
 
             if let Some(fmt) = default_format {
-                builder.default_format = Extension::from_ext(fmt)
-                    .ok_or_else(|| VclError::new(format!("unknown default_format `{fmt}` (use jpeg, webp, or avif)")))?;
+                builder.default_format = Extension::from_ext(fmt).ok_or_else(|| {
+                    VclError::new(format!(
+                        "unknown default_format `{fmt}` (use jpeg, webp, or avif)"
+                    ))
+                })?;
             }
 
             if let Some(q) = quality_jpeg {
@@ -138,7 +139,9 @@ mod impress {
             }
             if let Some(n) = pre_optimizer_threads {
                 if n < 0 {
-                    return Err(VclError::new("pre_optimizer_threads must be >= 0".to_string()));
+                    return Err(VclError::new(
+                        "pre_optimizer_threads must be >= 0".to_string(),
+                    ));
                 }
                 builder.pre_optimizer_threads = Some(n as usize);
             }
@@ -151,16 +154,23 @@ mod impress {
 
         pub fn add_root(&self, path: &str) -> Result<(), VclError> {
             let mut state = self.state.lock();
-            let builder = state.as_building_mut().map_err(|e| VclError::new(e.to_string()))?;
+            let builder = state
+                .as_building_mut()
+                .map_err(|e| VclError::new(e.to_string()))?;
             builder.roots.push(path.to_string());
             Ok(())
         }
 
         pub fn add_extension(&self, format: &str) -> Result<(), VclError> {
-            let ext = Extension::from_ext(format)
-                .ok_or_else(|| VclError::new(format!("unknown extension `{format}` (use jpeg, webp, or avif)")))?;
+            let ext = Extension::from_ext(format).ok_or_else(|| {
+                VclError::new(format!(
+                    "unknown extension `{format}` (use jpeg, webp, or avif)"
+                ))
+            })?;
             let mut state = self.state.lock();
-            let builder = state.as_building_mut().map_err(|e| VclError::new(e.to_string()))?;
+            let builder = state
+                .as_building_mut()
+                .map_err(|e| VclError::new(e.to_string()))?;
             builder.extensions.push(ext);
             Ok(())
         }
@@ -178,7 +188,9 @@ mod impress {
             pre_optimize: Option<bool>,
         ) -> Result<(), VclError> {
             if width <= 0 || height <= 0 {
-                return Err(VclError::new(format!("size `{name}`: width and height must be positive")));
+                return Err(VclError::new(format!(
+                    "size `{name}`: width and height must be positive"
+                )));
             }
             let size = make_size(
                 width as u32,
@@ -191,7 +203,9 @@ mod impress {
             );
 
             let mut state = self.state.lock();
-            let builder = state.as_building_mut().map_err(|e| VclError::new(e.to_string()))?;
+            let builder = state
+                .as_building_mut()
+                .map_err(|e| VclError::new(e.to_string()))?;
             builder.sizes.insert(name.to_string(), size);
             Ok(())
         }
@@ -209,7 +223,11 @@ mod impress {
             optimize_max_bytes: Option<i64>,
         ) -> Result<(), VclError> {
             let max_bytes = match optimize_max_bytes {
-                Some(n) if n < 0 => return Err(VclError::new("optimize_max_bytes must be >= 0 (use 0 to disable the cap)".to_string())),
+                Some(n) if n < 0 => {
+                    return Err(VclError::new(
+                        "optimize_max_bytes must be >= 0 (use 0 to disable the cap)".to_string(),
+                    ))
+                }
                 Some(n) => Some(n as usize),
                 None => None,
             };
@@ -225,19 +243,26 @@ mod impress {
             );
 
             let mut state = self.state.lock();
-            let builder = state.as_building_mut().map_err(|e| VclError::new(e.to_string()))?;
+            let builder = state
+                .as_building_mut()
+                .map_err(|e| VclError::new(e.to_string()))?;
             builder.statics.push(route);
             Ok(())
         }
 
         pub fn set_logger(&self, path: &str, level: Option<&str>) -> Result<(), VclError> {
             let level = match level {
-                Some(s) => Some(LevelFilter::from_str(s)
-                    .map_err(|_| VclError::new(format!("invalid log level `{s}` (use off, error, warn, info, debug, trace)")))?),
+                Some(s) => Some(LevelFilter::from_str(s).map_err(|_| {
+                    VclError::new(format!(
+                        "invalid log level `{s}` (use off, error, warn, info, debug, trace)"
+                    ))
+                })?),
                 None => None,
             };
             let mut state = self.state.lock();
-            let builder = state.as_building_mut().map_err(|e| VclError::new(e.to_string()))?;
+            let builder = state
+                .as_building_mut()
+                .map_err(|e| VclError::new(e.to_string()))?;
             builder.logger = Some(LoggerConfig {
                 path: path.to_string(),
                 level,
@@ -258,11 +283,15 @@ mod impress {
                     return Err(VclError::new("engine.build() already called".to_string()));
                 }
                 EngineState::Failed => {
-                    return Err(VclError::new("engine.build() previously failed; reload VCL".to_string()));
+                    return Err(VclError::new(
+                        "engine.build() previously failed; reload VCL".to_string(),
+                    ));
                 }
             };
 
-            let config = builder.into_config().map_err(|e| VclError::new(e.to_string()))?;
+            let config = builder
+                .into_config()
+                .map_err(|e| VclError::new(e.to_string()))?;
             let config = Arc::new(config);
 
             if let Some(logger) = &config.logger {
@@ -294,18 +323,23 @@ mod impress {
             }
         }
     }
-
 }
 
 fn setup_logging(logger_config: &LoggerConfig) -> Result<(), Error> {
     let file = FileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} | {({l}):5.5} | {f}:{L} — {m}{n}")))
+        .encoder(Box::new(PatternEncoder::new(
+            "{d(%Y-%m-%d %H:%M:%S)} | {({l}):5.5} | {f}:{L} — {m}{n}",
+        )))
         .append(true)
         .build(&logger_config.path)?;
 
     let config = LogConfig::builder()
         .appender(Appender::builder().build("file_ap", Box::new(file)))
-        .build(Root::builder().appender("file_ap").build(logger_config.level.unwrap_or(LevelFilter::Info)))?;
+        .build(
+            Root::builder()
+                .appender("file_ap")
+                .build(logger_config.level.unwrap_or(LevelFilter::Info)),
+        )?;
 
     log4rs::init_config(config)?;
     Ok(())

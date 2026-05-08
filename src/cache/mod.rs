@@ -3,27 +3,27 @@ mod file_saver;
 mod pre_optimizer;
 mod watcher;
 
+use crate::backend::FileTransfer;
+use crate::cache::file_saver::{InFlight, OptimizeJob};
+use crate::config::{Config, Extension, SharedConfig};
+use crate::error::Error;
+use crate::static_files::Transfer;
+use crate::utils;
+use chrono::{DateTime, Utc};
+use headers_accept::Accept;
+use image::ImageFormat;
+use mediatype::MediaType;
+use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Deref;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
 use std::sync::mpsc::Sender;
+use std::sync::{mpsc, Arc};
 use std::thread;
-use parking_lot::{Mutex, RwLock};
-use chrono::{DateTime, Utc};
-use headers_accept::Accept;
-use image::ImageFormat;
-use mediatype::MediaType;
 use walkdir::WalkDir;
-use crate::backend::FileTransfer;
-use crate::static_files::Transfer;
-use crate::cache::file_saver::{InFlight, OptimizeJob};
-use crate::config::{Config, Extension, SharedConfig};
-use crate::error::Error;
-use crate::utils;
 
 pub type CacheData = Arc<RwLock<HashMap<String, CacheImage>>>;
 
@@ -57,9 +57,24 @@ impl Cache {
                 Err(e) => error!("startup orphan sweep failed: {}", e),
             }
 
-            file_saver::spawn(thread_config.clone(), thread_data.clone(), thread_in_flight.clone(), rx);
-            watcher::spawn(thread_config.clone(), thread_data.clone(), thread_tx.clone(), thread_in_flight.clone());
-            pre_optimizer::spawn(thread_config.clone(), thread_data.clone(), thread_tx.clone(), thread_in_flight.clone());
+            file_saver::spawn(
+                thread_config.clone(),
+                thread_data.clone(),
+                thread_in_flight.clone(),
+                rx,
+            );
+            watcher::spawn(
+                thread_config.clone(),
+                thread_data.clone(),
+                thread_tx.clone(),
+                thread_in_flight.clone(),
+            );
+            pre_optimizer::spawn(
+                thread_config.clone(),
+                thread_data.clone(),
+                thread_tx.clone(),
+                thread_in_flight.clone(),
+            );
 
             cleaner::spawn(thread_config.clone(), thread_data.clone());
         });
@@ -80,25 +95,37 @@ impl Cache {
             .map(Deref::deref)
             .collect::<HashSet<&str>>();
 
-        let files = config.roots.iter()
-            .flat_map(|root| WalkDir::new(root).into_iter()
+        let files = config.roots.iter().flat_map(|root| {
+            WalkDir::new(root)
+                .into_iter()
                 .filter_map(Result::ok)
                 .filter(|e| !e.file_type().is_dir())
-                .map(|e| (root.clone(), e)));
+                .map(|e| (root.clone(), e))
+        });
 
         for (root, file) in files {
             let filename = file.path().to_string_lossy().to_string();
-            let filename_without_root = match file.path().strip_prefix(&root).ok().and_then(|p| p.to_str()) {
+            let filename_without_root = match file
+                .path()
+                .strip_prefix(&root)
+                .ok()
+                .and_then(|p| p.to_str())
+            {
                 Some(s) => s,
                 None => {
                     //either WalkDir returned a path that does not start with its root (shouldn't happen)
                     //or the path contains non-UTF8 bytes; either way, skip it
-                    error!("skipping unparseable path under root {:?}: {:?}", root, file.path());
+                    error!(
+                        "skipping unparseable path under root {:?}: {:?}",
+                        root,
+                        file.path()
+                    );
                     continue;
                 }
             };
 
-            if let (Some(stem), Some(extension)) = utils::decompose_filename(filename_without_root) {
+            if let (Some(stem), Some(extension)) = utils::decompose_filename(filename_without_root)
+            {
                 if !supported_extensions.contains(extension) {
                     continue;
                 }
@@ -153,7 +180,12 @@ impl Cache {
         }
     }
 
-    pub fn get(&self, image_id: &str, size: &str, accept: Option<Accept>) -> Result<Option<FetchResult>, Error> {
+    pub fn get(
+        &self,
+        image_id: &str,
+        size: &str,
+        accept: Option<Accept>,
+    ) -> Result<Option<FetchResult>, Error> {
         let lock = self.data.read();
         let Some(cache) = lock.get(image_id) else {
             return Ok(None);
@@ -161,7 +193,10 @@ impl Cache {
 
         //batch all missing extensions into one OptimizeJob — saver reads + resizes
         //the source ONCE for the whole job, then encodes each extension
-        let missing: Vec<Extension> = self.config.extensions.iter()
+        let missing: Vec<Extension> = self
+            .config
+            .extensions
+            .iter()
             .filter(|ext| !cache.has(size, **ext))
             .copied()
             .collect();
@@ -174,7 +209,8 @@ impl Cache {
         //buffer build. With one we fill a stack array (config.extensions has
         //at most 3 entries) instead of heap-allocating a Vec per request.
         let appropriate_extension = if let Some(accept) = accept.as_ref() {
-            let mut media_buf: [MediaType<'static>; 3] = std::array::from_fn(|_| Extension::JPEG.to_media_type());
+            let mut media_buf: [MediaType<'static>; 3] =
+                std::array::from_fn(|_| Extension::JPEG.to_media_type());
             let mut n = 0;
             for ext in &self.config.extensions {
                 if cache.has(size, *ext) {
@@ -182,7 +218,8 @@ impl Cache {
                     n += 1;
                 }
             }
-            accept.negotiate(media_buf[..n].iter())
+            accept
+                .negotiate(media_buf[..n].iter())
                 .and_then(|media_type| Extension::from_ext(media_type.subty.as_str()))
                 .unwrap_or(self.config.default_format)
         } else {
@@ -228,7 +265,9 @@ impl Cache {
             //channel closed (saver thread died); release the in_flight slot
             //so the slot doesn't leak forever
             error!("optimize channel closed: {}", e);
-            self.in_flight.lock().remove(&(image_id.to_owned(), size.to_owned()));
+            self.in_flight
+                .lock()
+                .remove(&(image_id.to_owned(), size.to_owned()));
         }
     }
 }
@@ -350,7 +389,12 @@ impl CacheImage {
         }
     }
 
-    pub fn add<P: AsRef<Path>>(&mut self, size: String, ext: Extension, path: P) -> std::io::Result<()> {
+    pub fn add<P: AsRef<Path>>(
+        &mut self,
+        size: String,
+        ext: Extension,
+        path: P,
+    ) -> std::io::Result<()> {
         let variant = CacheVariant::from_path(path)?;
         self.optimized[ext as usize].insert(size, variant);
         Ok(())
@@ -364,7 +408,6 @@ impl CacheImage {
         self.optimized[ext as usize].contains_key(size)
     }
 }
-
 
 pub struct FetchResult {
     pub data: Transfer,

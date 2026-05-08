@@ -1,7 +1,7 @@
-use image::DynamicImage;
-use libavif::{AvifData, AvifImage, Encoder, RgbPixels, YuvFormat};
 use crate::error::Error;
 use crate::images::OptimizedImage;
+use image::DynamicImage;
+use libavif::{AvifData, AvifImage, Encoder, RgbPixels, YuvFormat};
 
 pub struct Avif {
     data: AvifData<'static>,

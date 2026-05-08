@@ -245,7 +245,9 @@ mod tests {
 
     impl FakePuller {
         fn new(chunks: Vec<(Vec<u8>, ResultTag)>) -> Self {
-            Self { chunks: chunks.into() }
+            Self {
+                chunks: chunks.into(),
+            }
         }
     }
 
@@ -257,7 +259,10 @@ mod tests {
                 //rather than a silent infinite loop.
                 None => panic!("FakePuller exhausted: state machine asked for more"),
             };
-            assert!(data.len() <= buf.len(), "test data chunk wider than scratch");
+            assert!(
+                data.len() <= buf.len(),
+                "test data chunk wider than scratch"
+            );
             buf[..data.len()].copy_from_slice(&data);
             match tag {
                 ResultTag::Ok => PullResult::Ok(data.len()),
@@ -288,7 +293,12 @@ mod tests {
         let mut vfp = MinifyVfp::new("text/html".into(), body.len());
         let mut up = FakePuller::new(vec![(body.clone(), ResultTag::End)]);
         let out = drain(&mut vfp, &mut up).unwrap();
-        assert!(out.len() < body.len(), "got {} bytes, expected <{}", out.len(), body.len());
+        assert!(
+            out.len() < body.len(),
+            "got {} bytes, expected <{}",
+            out.len(),
+            body.len()
+        );
         assert!(std::str::from_utf8(&out).unwrap().contains("<p>hi"));
     }
 
@@ -352,7 +362,8 @@ mod tests {
     fn drain_handles_small_out_buffer() {
         //Caller passes a tiny output buffer; we must split the drain across
         //multiple pull calls without losing or duplicating bytes.
-        let body: &[u8] = b"<html>\n  <body>\n    <p>hello world hello world</p>\n  </body>\n</html>";
+        let body: &[u8] =
+            b"<html>\n  <body>\n    <p>hello world hello world</p>\n  </body>\n</html>";
         let mut vfp = MinifyVfp::new("text/html".into(), body.len());
         let mut up = FakePuller::new(vec![(body.to_vec(), ResultTag::End)]);
 

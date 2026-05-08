@@ -1,23 +1,21 @@
+use crate::cache::CacheData;
+use crate::config::{Config, Extension, SharedConfig};
+use crate::utils;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 use walkdir::WalkDir;
-use crate::cache::CacheData;
-use crate::config::{Config, Extension, SharedConfig};
-use crate::utils;
 
 const SWEEP_INTERVAL: Duration = Duration::from_secs(86_400);
 
 pub fn spawn(config: SharedConfig, data: CacheData) {
-    thread::spawn(move || {
-        loop {
-            thread::sleep(SWEEP_INTERVAL);
-            match sweep_once(&config, &data) {
-                Ok(0) => {}
-                Ok(n) => info!("cleaner: removed {} orphan cache file(s)", n),
-                Err(e) => error!("cleaner: sweep failed: {}", e),
-            }
+    thread::spawn(move || loop {
+        thread::sleep(SWEEP_INTERVAL);
+        match sweep_once(&config, &data) {
+            Ok(0) => {}
+            Ok(n) => info!("cleaner: removed {} orphan cache file(s)", n),
+            Err(e) => error!("cleaner: sweep failed: {}", e),
         }
     });
 }
@@ -107,7 +105,9 @@ fn is_orphan(config: &Config, data: &CacheData, parsed: &CacheFilename) -> bool 
     if !config.sizes.contains_key(&parsed.size) {
         return true;
     }
-    let configured_ext = config.extensions.iter()
+    let configured_ext = config
+        .extensions
+        .iter()
         .filter_map(|ext| ext.extensions().first().copied())
         .any(|e| e == parsed.ext);
     if !configured_ext {
@@ -119,25 +119,39 @@ fn is_orphan(config: &Config, data: &CacheData, parsed: &CacheFilename) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use parking_lot::RwLock;
     use crate::cache::CacheImage;
     use crate::config::{Extension, Size};
+    use parking_lot::RwLock;
+    use std::collections::HashMap;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     fn make_config(cache_dir: &Path) -> Config {
         let mut sizes = HashMap::new();
-        sizes.insert("medium".to_string(), Size {
-            width: 600, height: 600, quality: [0.0; 3],
-            pattern: None, pre_optimize: None,
-            pattern_regex: None, quality_serialized: None,
-        });
-        sizes.insert("high".to_string(), Size {
-            width: 1200, height: 1200, quality: [0.0; 3],
-            pattern: None, pre_optimize: None,
-            pattern_regex: None, quality_serialized: None,
-        });
+        sizes.insert(
+            "medium".to_string(),
+            Size {
+                width: 600,
+                height: 600,
+                quality: [0.0; 3],
+                pattern: None,
+                pre_optimize: None,
+                pattern_regex: None,
+                quality_serialized: None,
+            },
+        );
+        sizes.insert(
+            "high".to_string(),
+            Size {
+                width: 1200,
+                height: 1200,
+                quality: [0.0; 3],
+                pattern: None,
+                pre_optimize: None,
+                pattern_regex: None,
+                quality_serialized: None,
+            },
+        );
 
         Config {
             extensions: vec![Extension::WEBP, Extension::AVIF],
@@ -190,7 +204,10 @@ mod tests {
 
         let config = make_config(tmp.path());
         let mut map = HashMap::new();
-        map.insert("products/logo".to_string(), known_image("/dev/null/products/logo.jpg"));
+        map.insert(
+            "products/logo".to_string(),
+            known_image("/dev/null/products/logo.jpg"),
+        );
         let data: CacheData = Arc::new(RwLock::new(map));
 
         assert_eq!(sweep_once(&config, &data).unwrap(), 0);
@@ -216,7 +233,10 @@ mod tests {
 
         let config = make_config(tmp.path()); // "low" is NOT in sizes
         let mut map = HashMap::new();
-        map.insert("products/logo".to_string(), known_image("/dev/null/products/logo.jpg"));
+        map.insert(
+            "products/logo".to_string(),
+            known_image("/dev/null/products/logo.jpg"),
+        );
         let data: CacheData = Arc::new(RwLock::new(map));
 
         assert_eq!(sweep_once(&config, &data).unwrap(), 1);
@@ -230,7 +250,10 @@ mod tests {
 
         let config = make_config(tmp.path());
         let mut map = HashMap::new();
-        map.insert("products/logo".to_string(), known_image("/dev/null/products/logo.jpg"));
+        map.insert(
+            "products/logo".to_string(),
+            known_image("/dev/null/products/logo.jpg"),
+        );
         let data: CacheData = Arc::new(RwLock::new(map));
 
         assert_eq!(sweep_once(&config, &data).unwrap(), 1);
@@ -248,10 +271,14 @@ mod tests {
         // but with no optimized entry for (medium, WEBP).
         let mut map = HashMap::new();
         let mut img = known_image("/dev/null/other/source.jpg"); //different image_id key below
-        //add() returns Err if the metadata stat fails, but we only need this
-        //entry as a setup fixture for the orphan-prune test that follows;
-        //either way, the post-sweep assertion is valid.
-        let _ = img.add("medium".to_string(), Extension::WEBP, tmp.path().join("medium/products/logo.webp"));
+                                                                 //add() returns Err if the metadata stat fails, but we only need this
+                                                                 //entry as a setup fixture for the orphan-prune test that follows;
+                                                                 //either way, the post-sweep assertion is valid.
+        let _ = img.add(
+            "medium".to_string(),
+            Extension::WEBP,
+            tmp.path().join("medium/products/logo.webp"),
+        );
         map.insert("other-id".to_string(), img); // intentionally mismatched image_id key
         let data: CacheData = Arc::new(RwLock::new(map));
 
@@ -266,7 +293,10 @@ mod tests {
         let config = make_config(tmp.path());
 
         let mut map = HashMap::new();
-        map.insert("a/b/c/deep".to_string(), known_image("/dev/null/a/b/c/deep.jpg"));
+        map.insert(
+            "a/b/c/deep".to_string(),
+            known_image("/dev/null/a/b/c/deep.jpg"),
+        );
         let data: CacheData = Arc::new(RwLock::new(map));
 
         assert_eq!(sweep_once(&config, &data).unwrap(), 0);

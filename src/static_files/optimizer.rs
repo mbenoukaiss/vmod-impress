@@ -33,9 +33,14 @@ pub fn optimize_css(input: &[u8]) -> Result<Vec<u8>, Error> {
         let s = std::str::from_utf8(input)?;
         let mut sheet = StyleSheet::parse(s, ParserOptions::default())
             .map_err(|e| Error::new(format!("css parse: {e:?}")))?;
-        sheet.minify(MinifyOptions::default())
+        sheet
+            .minify(MinifyOptions::default())
             .map_err(|e| Error::new(format!("css minify: {e:?}")))?;
-        let result = sheet.to_css(PrinterOptions { minify: true, ..Default::default() })
+        let result = sheet
+            .to_css(PrinterOptions {
+                minify: true,
+                ..Default::default()
+            })
             .map_err(|e| Error::new(format!("css print: {e:?}")))?;
         Ok(result.code.into_bytes())
     })
@@ -66,12 +71,18 @@ pub fn optimize_js(input: &[u8]) -> Result<Vec<u8>, Error> {
         //pre-classification — let the parser figure it out from the source itself
         let parsed = Parser::new(&allocator, source, SourceType::unambiguous()).parse();
         if !parsed.errors.is_empty() {
-            return Err(Error::new(format!("js parse: {} error(s)", parsed.errors.len())));
+            return Err(Error::new(format!(
+                "js parse: {} error(s)",
+                parsed.errors.len()
+            )));
         }
         let mut program = parsed.program;
         let _ = Minifier::new(MinifierOptions::default()).minify(&allocator, &mut program);
         let result = Codegen::new()
-            .with_options(CodegenOptions { minify: true, ..CodegenOptions::default() })
+            .with_options(CodegenOptions {
+                minify: true,
+                ..CodegenOptions::default()
+            })
             .build(&program);
         Ok(result.code.into_bytes())
     })

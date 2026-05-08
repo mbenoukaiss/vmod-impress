@@ -11,10 +11,12 @@ use std::path::{Component, Path, PathBuf};
 /// done once at config-load time so the per-request hot path stays cheap).
 pub fn safe_join(root_canon: &Path, rel: &str) -> Option<PathBuf> {
     let rel_path = Path::new(rel);
-    if rel_path.components().any(|c| matches!(
-        c,
-        Component::ParentDir | Component::RootDir | Component::Prefix(_)
-    )) {
+    if rel_path.components().any(|c| {
+        matches!(
+            c,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
         return None;
     }
     let joined = root_canon.join(rel_path);

@@ -1,16 +1,16 @@
-use std::collections::HashSet;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::mpsc::Receiver;
-use parking_lot::Mutex;
-use std::thread;
-use std::time::Duration;
-use rusty_pool::ThreadPool;
 use crate::cache::CacheData;
 use crate::config::{Extension, SharedConfig};
 use crate::error::Error;
 use crate::images;
 use crate::images::OptimizationConfig;
+use parking_lot::Mutex;
+use rusty_pool::ThreadPool;
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 pub type InFlight = Arc<Mutex<HashSet<(String, String)>>>;
 
@@ -23,7 +23,12 @@ pub struct OptimizeJob {
     pub extensions: Vec<Extension>,
 }
 
-pub fn spawn(config: SharedConfig, data: CacheData, in_flight: InFlight, rx: Receiver<OptimizeJob>) {
+pub fn spawn(
+    config: SharedConfig,
+    data: CacheData,
+    in_flight: InFlight,
+    rx: Receiver<OptimizeJob>,
+) {
     let threads = config.pre_optimizer_threads.unwrap_or(1);
     let pool = ThreadPool::new(0, threads, Duration::from_secs(60));
 
@@ -54,7 +59,9 @@ fn run_job(config: SharedConfig, cache: CacheData, job: OptimizeJob) -> Result<(
 
     let base_image_path = {
         let lock = cache.read();
-        let data = lock.get(&job.image_id).ok_or(Error::new("Image not found"))?;
+        let data = lock
+            .get(&job.image_id)
+            .ok_or(Error::new("Image not found"))?;
         data.base_image_path.clone()
     };
 
@@ -67,13 +74,21 @@ fn run_job(config: SharedConfig, cache: CacheData, job: OptimizeJob) -> Result<(
         let mut path = PathBuf::from(&config.cache_directory);
         path.push(&job.size);
         path.push(&job.image_id);
-        path.set_extension(extension.extensions().first().expect("Failed to get extension"));
+        path.set_extension(
+            extension
+                .extensions()
+                .first()
+                .expect("Failed to get extension"),
+        );
 
         let optimization_config = OptimizationConfig::new(size, extension, false);
         let optimized = match images::optimize(&resized, optimization_config) {
             Ok(o) => o,
             Err(e) => {
-                error!("optimize {}/{}/{:?} failed: {}", job.image_id, job.size, extension, e);
+                error!(
+                    "optimize {}/{}/{:?} failed: {}",
+                    job.image_id, job.size, extension, e
+                );
                 continue;
             }
         };
