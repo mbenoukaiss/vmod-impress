@@ -1,7 +1,4 @@
-FROM rust:1.95-slim-bookworm
-
-ARG USER_ID
-ARG GROUP_ID
+FROM rust:1.95-slim-bookworm AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -27,12 +24,40 @@ RUN set -eux; \
         pkg-config; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*; \
-    groupadd -f -g "$GROUP_ID" defaultgroup; \
-    useradd defaultuser -u "$USER_ID" -g "$GROUP_ID" -m -s /bin/sh; \
     mkdir -p /var/lib/varnish/varnishd; \
     chmod -R 777 /usr/lib/varnish/vmods /var/lib/varnish/varnishd
 
-ADD build.sh /build.sh
+RUN rustup component add rustfmt clippy
+
+
+FROM base AS ci-builder
+
+WORKDIR /build
+
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src && : > src/lib.rs
+
+RUN cargo build --lib --release --locked
+
+RUN rm -rf src Cargo.toml Cargo.lock \
+    && tar -czf /target-cache.tar.gz -C /build target
+
+
+FROM base AS ci
+
+COPY --from=ci-builder /target-cache.tar.gz /target-cache.tar.gz
+
+
+FROM base AS dev
+
+ARG USER_ID
+ARG GROUP_ID
+
+RUN set -eux; \
+    groupadd -f -g "$GROUP_ID" defaultgroup; \
+    useradd defaultuser -u "$USER_ID" -g "$GROUP_ID" -m -s /bin/sh
+
+COPY docker/build.sh /build.sh
 WORKDIR /build
 USER defaultuser
 ENTRYPOINT ["tail", "-f", "/dev/null"]
